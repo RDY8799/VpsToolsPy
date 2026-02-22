@@ -36,6 +36,7 @@ class VPSToolsApp:
         self.sys_actions = SystemActions()
         self.power_tools = PowerTools()
         self.lang = LanguageManager("pt")
+        self.ui.set_language(self.lang.current_lang)
         self.user_manager = UserManager()
         self.repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.services = {
@@ -64,9 +65,57 @@ class VPSToolsApp:
             return str(int(value))
         return value.lower()
 
+    def _txt(self, pt: str, en: str) -> str:
+        return en if self.lang.current_lang == "en" else pt
+
     def _confirm(self, action: str) -> bool:
-        answer = self.ui.prompt(f"Confirmar {action}? (s/n): ").strip().lower()
-        return answer == "s"
+        if self.lang.current_lang == "en":
+            action_map = {
+                "criacao de usuario": "user creation",
+                "exclusao de usuario": "user deletion",
+                "alteracao de limite": "limit change",
+                "alteracao de expiracao": "expiry change",
+                "alteracao de senha": "password change",
+                "desconexao do usuario": "user disconnection",
+                "backup de usuarios": "user backup",
+                "restauracao de backup": "backup restore",
+                "instalacao do servico": "service installation",
+                "parada do servico": "service stop",
+                "inicio do servico": "service start",
+                "reinicio do servico": "service restart",
+                "desinstalacao do servico": "service uninstall",
+                "criacao de cliente openvpn": "OpenVPN client creation",
+                "revogacao de cliente openvpn": "OpenVPN client revoke",
+                "alteracao do banner SSH": "SSH banner change",
+                "limpeza de cache e inodes": "cache/inodes cleanup",
+                "atualizacao do sistema": "system update",
+                "reinicio do servidor": "server reboot",
+                "DESINSTALACAO COMPLETA": "full uninstall",
+                "atualizacao do script": "script update",
+                "criacao de comando global": "global command creation",
+                "criacao de swap": "swap creation",
+                "teste de velocidade do servidor": "server speed test",
+                "adicao de host payload": "payload host add",
+                "remocao de host payload": "payload host removal",
+                "alteracao de portas": "port change",
+                "backup de configuracoes": "config backup",
+                "restore de configuracoes": "config restore",
+                "aplicacao de perfil de firewall": "firewall profile apply",
+                "snapshot de rollback": "rollback snapshot",
+                "restaurar rollback": "rollback restore",
+                "executar setup wizard": "setup wizard",
+                "criar swap 1024 MB": "create 1024 MB swap",
+                "criar comando global 'menu'": "create global command 'menu'",
+                "execucao de domain audit": "domain audit execution",
+            }
+            for k, v in action_map.items():
+                if action == k or action.startswith(k + " "):
+                    action = action.replace(k, v, 1)
+                    break
+        answer = self.ui.prompt(
+            f"{self.lang.t('confirm.prefix', 'Confirm')} {action}? {self.lang.t('confirm.suffix', '(s/n):')}"
+        ).strip().lower()
+        return answer in {"s", "y", "yes", "sim"}
 
     def _ask_port(self, prompt: str, default_port: int):
         text = self.ui.prompt(prompt).strip()
@@ -78,7 +127,7 @@ class VPSToolsApp:
                 return port
         except ValueError:
             pass
-        self.ui.print_error("Porta invalida.")
+        self.ui.print_error(self.lang.t("common.invalid_port", "Porta invalida."))
         return None
 
     def _resolve_port_conflict(self, desired_port: int, requester_service: str):
@@ -89,16 +138,19 @@ class VPSToolsApp:
 
             owner = self.power_tools.detect_port_owner(port)
             self.ui.print_error(
-                f"Porta {port} em uso por processo '{owner.get('process', 'unknown')}' "
-                f"(servico: {owner.get('service', 'unknown')})."
+                self.lang.t("conflict.in_use", "Porta {port} em uso por processo '{process}' (servico: {service}).").format(
+                    port=port,
+                    process=owner.get("process", "unknown"),
+                    service=owner.get("service", "unknown"),
+                )
             )
-            self.ui.console.print("[yellow]1)[/yellow] Escolher outra porta")
-            self.ui.console.print("[yellow]2)[/yellow] Alterar porta do servico ocupante e continuar")
-            self.ui.console.print("[yellow]0)[/yellow] Cancelar instalacao")
-            option = self._normalize_option(self.ui.prompt("Opcao: "))
+            self.ui.console.print(f"[yellow]1)[/yellow] {self.lang.t('conflict.choose_other', 'Escolher outra porta')}")
+            self.ui.console.print(f"[yellow]2)[/yellow] {self.lang.t('conflict.change_owner', 'Alterar porta do servico ocupante e continuar')}")
+            self.ui.console.print(f"[yellow]0)[/yellow] {self.lang.t('conflict.cancel_install', 'Cancelar instalacao')}")
+            option = self._normalize_option(self.ui.prompt(self.lang.t("conflict.option", "Opcao: ")))
 
             if option == "1":
-                new_port = self._ask_port("Nova porta desejada: ", port)
+                new_port = self._ask_port(self.lang.t("conflict.new_desired_port", "Nova porta desejada: "), port)
                 if new_port is None:
                     continue
                 port = new_port
@@ -107,17 +159,17 @@ class VPSToolsApp:
             if option == "2":
                 owner_service = owner.get("service", "unknown")
                 if owner_service in {"unknown", requester_service.lower()}:
-                    self.ui.print_error("Nao foi possivel mapear o servico ocupante para alteracao automatica.")
+                    self.ui.print_error(self.lang.t("conflict.owner_unmapped", "Nao foi possivel mapear o servico ocupante para alteracao automatica."))
                     time.sleep(1)
                     continue
                 new_owner_port = self._ask_port(
-                    f"Nova porta para o servico '{owner_service}': ",
+                    self.lang.t("conflict.new_owner_port", "Nova porta para o servico '{service}': ").format(service=owner_service),
                     port + 1 if port < 65535 else 1024,
                 )
                 if new_owner_port is None:
                     continue
                 if not self.power_tools.is_port_available(new_owner_port):
-                    self.ui.print_error(f"Porta {new_owner_port} tambem esta em uso.")
+                    self.ui.print_error(self.lang.t("conflict.new_owner_in_use", "Porta {port} tambem esta em uso.").format(port=new_owner_port))
                     time.sleep(1)
                     continue
                 ok, msg = self.power_tools.change_port(owner_service, new_owner_port)
@@ -127,7 +179,7 @@ class VPSToolsApp:
                     # validar novamente que a porta originalmente desejada liberou
                     if self.power_tools.is_port_available(port):
                         return True, port
-                    self.ui.print_error("A porta original ainda esta em uso apos alteracao do servico ocupante.")
+                    self.ui.print_error(self.lang.t("conflict.original_still_used", "A porta original ainda esta em uso apos alteracao do servico ocupante."))
                     time.sleep(1)
                 else:
                     self.ui.print_error(msg)
@@ -137,18 +189,18 @@ class VPSToolsApp:
             if option == "0":
                 return False, None
 
-            self.ui.print_error("Opcao invalida.")
+            self.ui.print_error(self.lang.t("menu.invalid", "Opcao invalida!"))
             time.sleep(1)
 
     def _pick_user_for_action(self, action_label: str):
         users = self.user_manager.list_users()
         username = self.ui.select_user(users, action_label=action_label)
         if username is None:
-            self.ui.print_info("Acao cancelada.")
+            self.ui.print_info(self.lang.t("common.cancelled", "Acao cancelada."))
             time.sleep(1)
             return None
         if not username.strip():
-            self.ui.print_error("Usuario invalido.")
+            self.ui.print_error(self.lang.t("common.invalid_user", "Usuario invalido."))
             time.sleep(1)
             return None
         return username.strip()
@@ -187,7 +239,7 @@ class VPSToolsApp:
             elif option == "00":
                 sys.exit(0)
             else:
-                self.ui.print_error("Opcao invalida!")
+                self.ui.print_error(self.lang.t("menu.invalid", "Opcao invalida!"))
                 time.sleep(2)
 
     def user_manager_menu(self):
@@ -197,31 +249,33 @@ class VPSToolsApp:
             self.ui.draw_user_table(users)
 
             options = {
-                "01": "NOVO USUARIO",
-                "02": "APAGAR USUARIO",
-                "03": "ALTERAR LIMITE",
-                "04": "ALTERAR EXPIRACAO",
-                "05": "ALTERAR SENHA",
-                "06": "DESCONECTAR USUARIO",
-                "07": "BACKUP DE USUARIOS",
-                "08": "RESTAURAR BACKUP",
-                "00": "VOLTAR",
+                "01": self.lang.t("users.new", "NOVO USUARIO"),
+                "02": self.lang.t("users.delete", "APAGAR USUARIO"),
+                "03": self.lang.t("users.limit", "ALTERAR LIMITE"),
+                "04": self.lang.t("users.expiry", "ALTERAR EXPIRACAO"),
+                "05": self.lang.t("users.password", "ALTERAR SENHA"),
+                "06": self.lang.t("users.disconnect", "DESCONECTAR USUARIO"),
+                "07": self.lang.t("users.backup", "BACKUP DE USUARIOS"),
+                "08": self.lang.t("users.restore", "RESTAURAR BACKUP"),
+                "00": self.lang.t("menu.back", "VOLTAR"),
             }
-            self.ui.draw_menu(options, "GERENCIAMENTO DE USUARIOS")
+            self.ui.draw_menu(options, self.lang.t("users.title", "GERENCIAMENTO DE USUARIOS"))
             option = self._normalize_option(self.ui.prompt())
 
             if option == "1":
                 if not self._confirm("criacao de usuario"):
                     continue
-                username = self.ui.prompt("Nome do novo usuario: ")
-                password = self.ui.prompt("Senha para o usuario: ")
-                days = self.ui.prompt("Dias para expirar: ")
-                limit = self.ui.prompt("Limite de conexoes: ")
+                username = self.ui.prompt("Nome do novo usuario: " if self.lang.current_lang == "pt" else "New username: ")
+                password = self.ui.prompt("Senha para o usuario: " if self.lang.current_lang == "pt" else "Password for user: ")
+                days = self.ui.prompt("Dias para expirar: " if self.lang.current_lang == "pt" else "Days to expire: ")
+                limit = self.ui.prompt("Limite de conexoes: " if self.lang.current_lang == "pt" else "Connection limit: ")
                 result = self.user_manager.create_user(username, password, days, limit)
                 if result is True:
-                    self.ui.print_success(f"Usuario {username} criado!")
+                    self.ui.print_success(
+                        f"Usuario {username} criado!" if self.lang.current_lang == "pt" else f"User {username} created!"
+                    )
                 else:
-                    self.ui.print_error(f"Erro: {result}")
+                    self.ui.print_error(f"{self.lang.t('common.error_prefix', 'Erro:')} {result}")
                 time.sleep(2)
 
             elif option == "2":
@@ -232,9 +286,11 @@ class VPSToolsApp:
                     continue
                 result = self.user_manager.delete_user(username)
                 if result is True:
-                    self.ui.print_success(f"Usuario {username} deletado!")
+                    self.ui.print_success(
+                        f"Usuario {username} deletado!" if self.lang.current_lang == "pt" else f"User {username} deleted!"
+                    )
                 else:
-                    self.ui.print_error(f"Erro: {result}")
+                    self.ui.print_error(f"{self.lang.t('common.error_prefix', 'Erro:')} {result}")
                 time.sleep(2)
 
             elif option == "3":
@@ -243,12 +299,14 @@ class VPSToolsApp:
                 username = self._pick_user_for_action("alterar limite")
                 if not username:
                     continue
-                new_limit = self.ui.prompt("Novo limite de logins: ")
+                new_limit = self.ui.prompt("Novo limite de logins: " if self.lang.current_lang == "pt" else "New login limit: ")
                 result = self.user_manager.change_limit(username, new_limit)
                 if result is True:
-                    self.ui.print_success(f"Limite de {username} atualizado!")
+                    self.ui.print_success(
+                        f"Limite de {username} atualizado!" if self.lang.current_lang == "pt" else f"{username} limit updated!"
+                    )
                 else:
-                    self.ui.print_error(f"Erro: {result}")
+                    self.ui.print_error(f"{self.lang.t('common.error_prefix', 'Erro:')} {result}")
                 time.sleep(2)
 
             elif option == "4":
@@ -257,14 +315,16 @@ class VPSToolsApp:
                 username = self._pick_user_for_action("alterar expiracao")
                 if not username:
                     continue
-                year = self.ui.prompt("Ano (YYYY): ")
-                month = self.ui.prompt("Mes (MM): ")
-                day = self.ui.prompt("Dia (DD): ")
+                year = self.ui.prompt("Ano (YYYY): " if self.lang.current_lang == "pt" else "Year (YYYY): ")
+                month = self.ui.prompt("Mes (MM): " if self.lang.current_lang == "pt" else "Month (MM): ")
+                day = self.ui.prompt("Dia (DD): " if self.lang.current_lang == "pt" else "Day (DD): ")
                 result = self.user_manager.change_expiry(username, year, month, day)
                 if result is True:
-                    self.ui.print_success(f"Expiracao de {username} atualizada!")
+                    self.ui.print_success(
+                        f"Expiracao de {username} atualizada!" if self.lang.current_lang == "pt" else f"{username} expiry updated!"
+                    )
                 else:
-                    self.ui.print_error(f"Erro: {result}")
+                    self.ui.print_error(f"{self.lang.t('common.error_prefix', 'Erro:')} {result}")
                 time.sleep(2)
 
             elif option == "5":
@@ -273,12 +333,14 @@ class VPSToolsApp:
                 username = self._pick_user_for_action("alterar senha")
                 if not username:
                     continue
-                new_password = self.ui.prompt("Nova senha: ")
+                new_password = self.ui.prompt("Nova senha: " if self.lang.current_lang == "pt" else "New password: ")
                 result = self.user_manager.change_password(username, new_password)
                 if result is True:
-                    self.ui.print_success(f"Senha de {username} alterada!")
+                    self.ui.print_success(
+                        f"Senha de {username} alterada!" if self.lang.current_lang == "pt" else f"{username} password changed!"
+                    )
                 else:
-                    self.ui.print_error(f"Erro: {result}")
+                    self.ui.print_error(f"{self.lang.t('common.error_prefix', 'Erro:')} {result}")
                 time.sleep(2)
 
             elif option == "6":
@@ -288,36 +350,46 @@ class VPSToolsApp:
                 if not username:
                     continue
                 if self.user_manager.disconnect_user(username):
-                    self.ui.print_success(f"Usuario {username} desconectado!")
+                    self.ui.print_success(
+                        f"Usuario {username} desconectado!" if self.lang.current_lang == "pt" else f"User {username} disconnected!"
+                    )
                 else:
-                    self.ui.print_error(f"Nao foi possivel desconectar {username}.")
+                    self.ui.print_error(
+                        f"Nao foi possivel desconectar {username}." if self.lang.current_lang == "pt" else f"Could not disconnect {username}."
+                    )
                 time.sleep(2)
 
             elif option == "7":
                 if not self._confirm("backup de usuarios"):
                     continue
-                name = self.ui.prompt("Nome para o arquivo de backup: ")
+                name = self.ui.prompt("Nome para o arquivo de backup: " if self.lang.current_lang == "pt" else "Backup filename: ")
                 path = self.user_manager.backup_users(name)
                 if isinstance(path, str) and path.startswith("Erro"):
                     self.ui.print_error(path)
                 else:
-                    self.ui.print_success(f"Backup criado em: {path}")
+                    self.ui.print_success(
+                        f"Backup criado em: {path}" if self.lang.current_lang == "pt" else f"Backup created at: {path}"
+                    )
                 time.sleep(2)
 
             elif option == "8":
                 if not self._confirm("restauracao de backup"):
                     continue
-                file_path = self.ui.prompt("Caminho completo do backup: ")
+                file_path = self.ui.prompt("Caminho completo do backup: " if self.lang.current_lang == "pt" else "Full backup path: ")
                 if self.user_manager.restore_backup(file_path):
-                    self.ui.print_success("Backup restaurado com sucesso!")
+                    self.ui.print_success(
+                        "Backup restaurado com sucesso!" if self.lang.current_lang == "pt" else "Backup restored successfully!"
+                    )
                 else:
-                    self.ui.print_error("Falha ao restaurar backup.")
+                    self.ui.print_error(
+                        "Falha ao restaurar backup." if self.lang.current_lang == "pt" else "Failed to restore backup."
+                    )
                 time.sleep(2)
 
             elif option == "00":
                 break
             else:
-                self.ui.print_error("Opcao invalida!")
+                self.ui.print_error(self.lang.t("menu.invalid", "Opcao invalida!"))
                 time.sleep(2)
 
     def installer_menu(self):
@@ -326,15 +398,15 @@ class VPSToolsApp:
             options = {}
             for i, (name, service) in enumerate(self.services.items(), 1):
                 status = (
-                    "[bold green]INSTALADO[/]"
+                    f"[bold green]{self.lang.t('service.installed', 'INSTALADO')}[/]"
                     if service.is_installed()
-                    else "[bold red]NAO INSTALADO[/]"
+                    else f"[bold red]{self.lang.t('service.not_installed', 'NAO INSTALADO')}[/]"
                 )
                 options[f"{i:02d}"] = f"{name} {status}"
 
-            options["99"] = "VALIDACAO PRE-INSTALACAO"
+            options["99"] = self.lang.t("installer.precheck", "VALIDACAO PRE-INSTALACAO")
             options["00"] = self.lang.t("menu.back", "VOLTAR")
-            self.ui.draw_menu(options, "MENU DE INSTALACAO")
+            self.ui.draw_menu(options, self.lang.t("installer.title", "MENU DE INSTALACAO"))
 
             option = self._normalize_option(self.ui.prompt())
             if option == "00":
@@ -348,7 +420,7 @@ class VPSToolsApp:
                 service_name = list(self.services.keys())[idx]
                 self.generic_service_menu(service_name)
             except (ValueError, IndexError):
-                self.ui.print_error("Opcao invalida!")
+                self.ui.print_error(self.lang.t("menu.invalid", "Opcao invalida!"))
                 time.sleep(2)
 
     def generic_service_menu(self, service_name):
@@ -361,19 +433,28 @@ class VPSToolsApp:
             self.ui.clear()
             is_installed = service.is_installed()
             is_running = service.is_running()
-            status = "[bold green]ATIVO[/]" if is_running else "[bold red]INATIVO[/]"
+            status = (
+                f"[bold green]{self.lang.t('service.active', 'ATIVO')}[/]"
+                if is_running
+                else f"[bold red]{self.lang.t('service.inactive', 'INATIVO')}[/]"
+            )
 
             if not is_installed:
-                options = {"01": f"INSTALAR {service_name}", "00": "VOLTAR"}
+                options = {
+                    "01": f"{self.lang.t('service.install', 'INSTALAR')} {service_name}",
+                    "00": self.lang.t("menu.back", "VOLTAR"),
+                }
             else:
                 options = {
-                    "01": "PARAR SERVICO" if is_running else "INICIAR SERVICO",
-                    "02": "REINICIAR SERVICO",
-                    "03": "DESINSTALAR",
-                    "00": "VOLTAR",
+                    "01": self.lang.t("service.stop", "PARAR SERVICO")
+                    if is_running
+                    else self.lang.t("service.start", "INICIAR SERVICO"),
+                    "02": self.lang.t("service.restart", "REINICIAR SERVICO"),
+                    "03": self.lang.t("service.uninstall", "DESINSTALAR"),
+                    "00": self.lang.t("menu.back", "VOLTAR"),
                 }
                 if service_name == "OPENVPN":
-                    options["04"] = "GERENCIAR USUARIOS OPENVPN"
+                    options["04"] = self._txt("GERENCIAR USUARIOS OPENVPN", "MANAGE OPENVPN USERS")
 
             self.ui.draw_menu(options, f"{service_name} ({status})")
             option = self._normalize_option(self.ui.prompt())
@@ -388,24 +469,24 @@ class VPSToolsApp:
                         if not self._confirm(f"parada do servico {service_name}"):
                             continue
                         service.stop()
-                        self.ui.print_success("Servico parado!")
+                        self.ui.print_success(self.lang.t("service.stop_ok", "Servico parado!"))
                     else:
                         if not self._confirm(f"inicio do servico {service_name}"):
                             continue
                         service.start()
-                        self.ui.print_success("Servico iniciado!")
+                        self.ui.print_success(self.lang.t("service.start_ok", "Servico iniciado!"))
                 time.sleep(2)
             elif option == "2" and is_installed:
                 if not self._confirm(f"reinicio do servico {service_name}"):
                     continue
                 service.restart()
-                self.ui.print_success("Servico reiniciado!")
+                self.ui.print_success(self.lang.t("service.restart_ok", "Servico reiniciado!"))
                 time.sleep(2)
             elif option == "3" and is_installed:
                 if not self._confirm(f"desinstalacao do servico {service_name}"):
                     continue
                 service.uninstall()
-                self.ui.print_success("Servico desinstalado!")
+                self.ui.print_success(self.lang.t("service.uninstall_ok", "Servico desinstalado!"))
                 time.sleep(2)
                 break
             elif option == "4" and is_installed and service_name == "OPENVPN":
@@ -413,33 +494,33 @@ class VPSToolsApp:
             elif option == "00":
                 break
             else:
-                self.ui.print_error("Opcao invalida!")
+                self.ui.print_error(self.lang.t("menu.invalid", "Opcao invalida!"))
                 time.sleep(2)
 
     def install_service_flow(self, service_name):
         service = self.services[service_name]
-        ip = self.ui.prompt("Confirme o IP: ")
+        ip = self.ui.prompt(self._txt("Confirme o IP: ", "Confirm IP: "))
 
         try:
             required_ports = []
             if service_name == "SQUID":
-                port = self._ask_port("Porta para Squid (padrao 3128): ", 3128)
+                port = self._ask_port(self._txt("Porta para Squid (padrao 3128): ", "Squid port (default 3128): "), 3128)
                 if port is None:
                     return
                 ok_port, port = self._resolve_port_conflict(port, service_name)
                 if not ok_port:
                     return
                 required_ports = [port]
-                compress = self.ui.prompt("Ativar compressao SSH? (s/n): ").lower() == "s"
+                compress = self.ui.prompt(self._txt("Ativar compressao SSH? (s/n): ", "Enable SSH compression? (y/n): ")).lower() in {"s", "y", "yes", "sim"}
                 ok, issues = self.power_tools.pre_install_validation(service_name, required_ports)
                 if not ok:
-                    self.ui.print_error("Falha na validacao pre-instalacao: " + "; ".join(issues))
+                    self.ui.print_error(self._txt("Falha na validacao pre-instalacao: ", "Pre-install validation failed: ") + "; ".join(issues))
                     return
                 self.power_tools.save_rollback_snapshot("squid")
-                self.ui.show_spinner(f"Instalando {service_name}")
+                self.ui.show_spinner(self._txt(f"Instalando {service_name}", f"Installing {service_name}"))
                 result = service.install(port, ip, compress)
             elif service_name == "SSLH":
-                listen_port = self._ask_port("Porta para SSLH (padrao 443): ", 443)
+                listen_port = self._ask_port(self._txt("Porta para SSLH (padrao 443): ", "SSLH port (default 443): "), 443)
                 if listen_port is None:
                     return
                 ok_port, listen_port = self._resolve_port_conflict(listen_port, service_name)
@@ -448,13 +529,13 @@ class VPSToolsApp:
                 required_ports = [listen_port]
                 ok, issues = self.power_tools.pre_install_validation(service_name, required_ports)
                 if not ok:
-                    self.ui.print_error("Falha na validacao pre-instalacao: " + "; ".join(issues))
+                    self.ui.print_error(self._txt("Falha na validacao pre-instalacao: ", "Pre-install validation failed: ") + "; ".join(issues))
                     return
                 self.power_tools.save_rollback_snapshot("sslh")
-                self.ui.show_spinner(f"Instalando {service_name}")
+                self.ui.show_spinner(self._txt(f"Instalando {service_name}", f"Installing {service_name}"))
                 result = service.install(listen_port=listen_port)
             elif service_name == "STUNNEL":
-                listen_port = self._ask_port("Porta para STUNNEL (padrao 4433): ", 4433)
+                listen_port = self._ask_port(self._txt("Porta para STUNNEL (padrao 4433): ", "STUNNEL port (default 4433): "), 4433)
                 if listen_port is None:
                     return
                 ok_port, listen_port = self._resolve_port_conflict(listen_port, service_name)
@@ -463,13 +544,13 @@ class VPSToolsApp:
                 required_ports = [listen_port]
                 ok, issues = self.power_tools.pre_install_validation(service_name, required_ports)
                 if not ok:
-                    self.ui.print_error("Falha na validacao pre-instalacao: " + "; ".join(issues))
+                    self.ui.print_error(self._txt("Falha na validacao pre-instalacao: ", "Pre-install validation failed: ") + "; ".join(issues))
                     return
                 self.power_tools.save_rollback_snapshot("stunnel")
-                self.ui.show_spinner(f"Instalando {service_name}")
+                self.ui.show_spinner(self._txt(f"Instalando {service_name}", f"Installing {service_name}"))
                 result = service.install(listen_port=listen_port)
             elif service_name == "DROPBEAR":
-                port = self._ask_port("Porta para DROPBEAR (padrao 2222): ", 2222)
+                port = self._ask_port(self._txt("Porta para DROPBEAR (padrao 2222): ", "DROPBEAR port (default 2222): "), 2222)
                 if port is None:
                     return
                 ok_port, port = self._resolve_port_conflict(port, service_name)
@@ -478,29 +559,29 @@ class VPSToolsApp:
                 required_ports = [port]
                 ok, issues = self.power_tools.pre_install_validation(service_name, required_ports)
                 if not ok:
-                    self.ui.print_error("Falha na validacao pre-instalacao: " + "; ".join(issues))
+                    self.ui.print_error(self._txt("Falha na validacao pre-instalacao: ", "Pre-install validation failed: ") + "; ".join(issues))
                     return
                 self.power_tools.save_rollback_snapshot("dropbear")
-                self.ui.show_spinner(f"Instalando {service_name}")
+                self.ui.show_spinner(self._txt(f"Instalando {service_name}", f"Installing {service_name}"))
                 result = service.install(port=port)
             elif service_name == "OPENVPN":
-                port = self._ask_port("Porta OpenVPN (padrao 1194): ", 1194)
+                port = self._ask_port(self._txt("Porta OpenVPN (padrao 1194): ", "OpenVPN port (default 1194): "), 1194)
                 if port is None:
                     return
                 ok_port, port = self._resolve_port_conflict(port, service_name)
                 if not ok_port:
                     return
-                proto = self.ui.prompt("Protocolo udp/tcp (padrao udp): ").strip().lower() or "udp"
-                client_name = self.ui.prompt("Nome do cliente inicial (padrao client): ").strip() or "client"
-                with_host = self.ui.prompt("Usar host/dominio? (s/n): ").strip().lower() == "s"
-                endpoint = self.ui.prompt("Host/Dominio (vazio para IP): ").strip() if with_host else ""
+                proto = self.ui.prompt(self._txt("Protocolo udp/tcp (padrao udp): ", "Protocol udp/tcp (default udp): ")).strip().lower() or "udp"
+                client_name = self.ui.prompt(self._txt("Nome do cliente inicial (padrao client): ", "Initial client name (default client): ")).strip() or "client"
+                with_host = self.ui.prompt(self._txt("Usar host/dominio? (s/n): ", "Use host/domain? (y/n): ")).strip().lower() in {"s", "y", "yes", "sim"}
+                endpoint = self.ui.prompt(self._txt("Host/Dominio (vazio para IP): ", "Host/Domain (empty for IP): ")).strip() if with_host else ""
                 required_ports = [port]
                 ok, issues = self.power_tools.pre_install_validation(service_name, required_ports)
                 if not ok:
-                    self.ui.print_error("Falha na validacao pre-instalacao: " + "; ".join(issues))
+                    self.ui.print_error(self._txt("Falha na validacao pre-instalacao: ", "Pre-install validation failed: ") + "; ".join(issues))
                     return
                 self.power_tools.save_rollback_snapshot("openvpn")
-                self.ui.show_spinner(f"Instalando {service_name}")
+                self.ui.show_spinner(self._txt(f"Instalando {service_name}", f"Installing {service_name}"))
                 result = service.install(
                     port=port,
                     protocol=proto,
@@ -509,175 +590,178 @@ class VPSToolsApp:
                     client_name=client_name,
                 )
             elif service_name == "SHADOWSOCKS":
-                port = self._ask_port("Porta ShadowSocks (padrao 8388): ", 8388)
+                port = self._ask_port(self._txt("Porta ShadowSocks (padrao 8388): ", "ShadowSocks port (default 8388): "), 8388)
                 if port is None:
                     return
                 ok_port, port = self._resolve_port_conflict(port, service_name)
                 if not ok_port:
                     return
-                method = self.ui.prompt("Metodo (padrao chacha20-ietf-poly1305): ").strip() or "chacha20-ietf-poly1305"
-                password = self.ui.prompt("Senha (vazio para auto): ").strip()
+                method = self.ui.prompt(self._txt("Metodo (padrao chacha20-ietf-poly1305): ", "Method (default chacha20-ietf-poly1305): ")).strip() or "chacha20-ietf-poly1305"
+                password = self.ui.prompt(self._txt("Senha (vazio para auto): ", "Password (empty for auto): ")).strip()
                 required_ports = [port]
                 ok, issues = self.power_tools.pre_install_validation(service_name, required_ports)
                 if not ok:
-                    self.ui.print_error("Falha na validacao pre-instalacao: " + "; ".join(issues))
+                    self.ui.print_error(self._txt("Falha na validacao pre-instalacao: ", "Pre-install validation failed: ") + "; ".join(issues))
                     return
-                self.ui.show_spinner(f"Instalando {service_name}")
+                self.ui.show_spinner(self._txt(f"Instalando {service_name}", f"Installing {service_name}"))
                 result = service.install(port=port, password=password, method=method)
             elif service_name == "XRAY":
-                mode = self.ui.prompt("Modo (vless/vmess/trojan): ").strip().lower() or "vless"
-                port = self._ask_port("Porta (padrao 443): ", 443)
+                mode = self.ui.prompt(self._txt("Modo (vless/vmess/trojan): ", "Mode (vless/vmess/trojan): ")).strip().lower() or "vless"
+                port = self._ask_port(self._txt("Porta (padrao 443): ", "Port (default 443): "), 443)
                 if port is None:
                     return
                 ok_port, port = self._resolve_port_conflict(port, service_name)
                 if not ok_port:
                     return
-                host = self.ui.prompt("Host (opcional): ").strip()
-                path = self.ui.prompt("Path WS (padrao /rdy): ").strip() or "/rdy"
+                host = self.ui.prompt(self._txt("Host (opcional): ", "Host (optional): ")).strip()
+                path = self.ui.prompt(self._txt("Path WS (padrao /rdy): ", "WS Path (default /rdy): ")).strip() or "/rdy"
                 required_ports = [port]
                 ok, issues = self.power_tools.pre_install_validation(service_name, required_ports)
                 if not ok:
-                    self.ui.print_error("Falha na validacao pre-instalacao: " + "; ".join(issues))
+                    self.ui.print_error(self._txt("Falha na validacao pre-instalacao: ", "Pre-install validation failed: ") + "; ".join(issues))
                     return
-                self.ui.show_spinner(f"Instalando {service_name}")
+                self.ui.show_spinner(self._txt(f"Instalando {service_name}", f"Installing {service_name}"))
                 result = service.install(mode=mode, port=port, host=host, path=path)
             elif service_name == "HYSTERIA":
-                port = self._ask_port("Porta Hysteria (padrao 443): ", 443)
+                port = self._ask_port(self._txt("Porta Hysteria (padrao 443): ", "Hysteria port (default 443): "), 443)
                 if port is None:
                     return
                 ok_port, port = self._resolve_port_conflict(port, service_name)
                 if not ok_port:
                     return
-                domain = self.ui.prompt("Host/Dominio (vazio para sem host): ").strip()
-                password = self.ui.prompt("Senha (vazio para auto): ").strip()
+                domain = self.ui.prompt(self._txt("Host/Dominio (vazio para sem host): ", "Host/Domain (empty for none): ")).strip()
+                password = self.ui.prompt(self._txt("Senha (vazio para auto): ", "Password (empty for auto): ")).strip()
                 required_ports = [port]
                 ok, issues = self.power_tools.pre_install_validation(service_name, required_ports)
                 if not ok:
-                    self.ui.print_error("Falha na validacao pre-instalacao: " + "; ".join(issues))
+                    self.ui.print_error(self._txt("Falha na validacao pre-instalacao: ", "Pre-install validation failed: ") + "; ".join(issues))
                     return
-                self.ui.show_spinner(f"Instalando {service_name}")
+                self.ui.show_spinner(self._txt(f"Instalando {service_name}", f"Installing {service_name}"))
                 result = service.install(port=port, password=password, domain=domain)
             elif service_name == "DNSTT":
-                domain = self.ui.prompt("Dominio/subdominio DNSTT (ex: dns.seudominio.com): ").strip()
-                udp_port = self._ask_port("Porta UDP DNSTT (padrao 5300): ", 5300)
+                domain = self.ui.prompt(self._txt("Dominio/subdominio DNSTT (ex: dns.seudominio.com): ", "DNSTT domain/subdomain (e.g., dns.example.com): ")).strip()
+                udp_port = self._ask_port(self._txt("Porta UDP DNSTT (padrao 5300): ", "DNSTT UDP port (default 5300): "), 5300)
                 if udp_port is None:
                     return
                 ok_port, udp_port = self._resolve_port_conflict(udp_port, service_name)
                 if not ok_port:
                     return
-                secret = self.ui.prompt("Secret (vazio para auto): ").strip()
+                secret = self.ui.prompt(self._txt("Secret (vazio para auto): ", "Secret (empty for auto): ")).strip()
                 required_ports = [udp_port]
                 ok, issues = self.power_tools.pre_install_validation(service_name, required_ports)
                 if not ok:
-                    self.ui.print_error("Falha na validacao pre-instalacao: " + "; ".join(issues))
+                    self.ui.print_error(self._txt("Falha na validacao pre-instalacao: ", "Pre-install validation failed: ") + "; ".join(issues))
                     return
-                self.ui.show_spinner(f"Instalando {service_name}")
+                self.ui.show_spinner(self._txt(f"Instalando {service_name}", f"Installing {service_name}"))
                 result = service.install(domain=domain, udp_port=udp_port, secret=secret)
             elif service_name == "BADVPN":
-                port = self._ask_port("Porta para BADVPN (padrao 7300): ", 7300)
+                port = self._ask_port(self._txt("Porta para BADVPN (padrao 7300): ", "BADVPN port (default 7300): "), 7300)
                 if port is None:
                     return
                 ok_port, port = self._resolve_port_conflict(port, service_name)
                 if not ok_port:
                     return
-                self.ui.show_spinner(f"Instalando {service_name}")
+                self.ui.show_spinner(self._txt(f"Instalando {service_name}", f"Installing {service_name}"))
                 result = service.install(port=port)
             elif service_name == "TROJAN":
-                password = self.ui.prompt("Senha para Trojan: ")
-                port = self._ask_port("Porta para Trojan (padrao 443): ", 443)
+                password = self.ui.prompt(self._txt("Senha para Trojan: ", "Trojan password: "))
+                port = self._ask_port(self._txt("Porta para Trojan (padrao 443): ", "Trojan port (default 443): "), 443)
                 if port is None:
                     return
                 ok_port, port = self._resolve_port_conflict(port, service_name)
                 if not ok_port:
                     return
-                self.ui.show_spinner(f"Instalando {service_name}")
+                self.ui.show_spinner(self._txt(f"Instalando {service_name}", f"Installing {service_name}"))
                 result = service.install(password=password, port=port)
             else:
-                result = f"Servico desconhecido: {service_name}"
+                result = f"{self.lang.t('service.unknown', 'Servico desconhecido')}: {service_name}"
         except ValueError:
-            self.ui.print_error("Porta invalida. Digite um numero.")
+            self.ui.print_error(self.lang.t("common.invalid_port_number", "Porta invalida. Digite um numero."))
             return
 
         if result is True:
-            self.ui.print_success(f"{service_name} instalado com sucesso!")
+            self.ui.print_success(f"{service_name} {self.lang.t('service.install_ok', 'instalado com sucesso!')}")
         else:
-            self.ui.print_error(f"Erro: {result}")
+            self.ui.print_error(f"{self.lang.t('common.error_prefix', 'Erro:')} {result}")
 
     def openvpn_users_menu(self, openvpn_service):
         while True:
             self.ui.clear()
             clients = openvpn_service.list_clients()
-            table = Table(title="[bold yellow]USUARIOS OPENVPN[/bold yellow]", caption="[bold cyan]RDY SOFTWARE[/bold cyan]")
-            table.add_column("Cliente", style="cyan")
+            table = Table(
+                title=f"[bold yellow]{self.lang.t('openvpn.users_title', 'USUARIOS OPENVPN')}[/bold yellow]",
+                caption="[bold cyan]RDY SOFTWARE[/bold cyan]",
+            )
+            table.add_column(self.lang.t("openvpn.client_label", "Cliente"), style="cyan")
             if clients:
                 for c in clients:
                     table.add_row(c)
             else:
-                table.add_row("(nenhum)")
+                table.add_row(self.lang.t("openvpn.no_client", "(nenhum)"))
             self.ui.console.print(table)
 
             options = {
-                "01": "CRIAR CLIENTE",
-                "02": "REVOGAR CLIENTE",
-                "00": "VOLTAR",
+                "01": self.lang.t("openvpn.create_client", "CRIAR CLIENTE"),
+                "02": self.lang.t("openvpn.revoke_client", "REVOGAR CLIENTE"),
+                "00": self.lang.t("menu.back", "VOLTAR"),
             }
-            self.ui.draw_menu(options, "OPENVPN USERS")
+            self.ui.draw_menu(options, self.lang.t("openvpn.users_menu_title", "OPENVPN USERS"))
             option = self._normalize_option(self.ui.prompt())
             if option == "1":
                 if not self._confirm("criacao de cliente openvpn"):
                     continue
-                username = self.ui.prompt("Nome do cliente: ").strip()
-                use_host = self.ui.prompt("Usar host/dominio no cliente? (s/n): ").strip().lower() == "s"
-                endpoint = self.ui.prompt("Host/Dominio (vazio para IP): ").strip() if use_host else ""
+                username = self.ui.prompt(self.lang.t("openvpn.client_name", "Nome do cliente: ")).strip()
+                use_host = self.ui.prompt(self._txt("Usar host/dominio no cliente? (s/n): ", "Use host/domain in client? (y/n): ")).strip().lower() in {"s", "y", "yes", "sim"}
+                endpoint = self.ui.prompt(self._txt("Host/Dominio (vazio para IP): ", "Host/Domain (empty for IP): ")).strip() if use_host else ""
                 result = openvpn_service.add_client(username=username, endpoint=endpoint, use_domain=use_host)
-                if isinstance(result, str) and result.lower().startswith("cliente criado"):
+                if isinstance(result, str) and ("criado" in result.lower() or "created" in result.lower()):
                     self.ui.print_success(result)
                 else:
-                    self.ui.print_error(f"Erro: {result}")
+                    self.ui.print_error(f"{self.lang.t('common.error_prefix', 'Erro:')} {result}")
                 time.sleep(2)
             elif option == "2":
                 if not self._confirm("revogacao de cliente openvpn"):
                     continue
-                username = self.ui.prompt("Nome do cliente a revogar: ").strip()
+                username = self.ui.prompt(self.lang.t("openvpn.client_name_revoke", "Nome do cliente a revogar: ")).strip()
                 result = openvpn_service.revoke_client(username)
                 if result is True:
-                    self.ui.print_success(f"Cliente {username} revogado.")
+                    self.ui.print_success(self.lang.t("openvpn.client_revoked", "Cliente {username} revogado.").format(username=username))
                 else:
-                    self.ui.print_error(f"Erro: {result}")
+                    self.ui.print_error(f"{self.lang.t('common.error_prefix', 'Erro:')} {result}")
                 time.sleep(2)
             elif option == "00":
                 break
             else:
-                self.ui.print_error("Opcao invalida!")
+                self.ui.print_error(self.lang.t("menu.invalid", "Opcao invalida!"))
                 time.sleep(1)
 
     def tools_menu(self):
         while True:
             self.ui.clear()
             options = {
-                "01": "CRIAR/ALTERAR BANNER SSH",
-                "02": "GERENCIAR HOSTS (PAYLOADS)",
-                "03": "LIMPAR CACHE E INODES",
-                "04": "ATUALIZAR SISTEMA",
-                "05": "REINICIAR SERVIDOR",
-                "06": "DESINSTALACAO COMPLETA",
-                "07": "ATUALIZAR SCRIPT",
-                "08": "CRIAR COMANDO GLOBAL",
-                "09": "CRIAR SWAP",
-                "10": "TESTE DE VELOCIDADE",
-                "11": "POWER TOOLS",
-                "12": "DOMAIN AUDIT",
-                "00": "VOLTAR",
+                "01": self.lang.t("tools.banner", "CRIAR/ALTERAR BANNER SSH"),
+                "02": self.lang.t("tools.hosts", "GERENCIAR HOSTS (PAYLOADS)"),
+                "03": self.lang.t("tools.cache", "LIMPAR CACHE E INODES"),
+                "04": self.lang.t("tools.update_system", "ATUALIZAR SISTEMA"),
+                "05": self.lang.t("tools.reboot", "REINICIAR SERVIDOR"),
+                "06": self.lang.t("tools.full_uninstall", "DESINSTALACAO COMPLETA"),
+                "07": self.lang.t("tools.update_script", "ATUALIZAR SCRIPT"),
+                "08": self.lang.t("tools.global_cmd", "CRIAR COMANDO GLOBAL"),
+                "09": self.lang.t("tools.swap", "CRIAR SWAP"),
+                "10": self.lang.t("tools.speed", "TESTE DE VELOCIDADE"),
+                "11": self.lang.t("tools.power", "POWER TOOLS"),
+                "12": self.lang.t("tools.domain_audit", "DOMAIN AUDIT"),
+                "00": self.lang.t("menu.back", "VOLTAR"),
             }
-            self.ui.draw_menu(options, "FERRAMENTAS")
+            self.ui.draw_menu(options, self.lang.t("tools.title", "FERRAMENTAS"))
             option = self._normalize_option(self.ui.prompt())
 
             if option == "1":
                 if not self._confirm("alteracao do banner SSH"):
                     continue
-                banner_text = self.ui.prompt("Texto do Banner: ")
+                banner_text = self.ui.prompt(self._txt("Texto do Banner: ", "Banner text: "))
                 BannerManager.set_banner(banner_text)
-                self.ui.print_success("Banner atualizado!")
+                self.ui.print_success(self.lang.t("tools.banner_updated", "Banner atualizado!"))
                 time.sleep(2)
             elif option == "2":
                 self.hosts_menu()
@@ -687,40 +771,40 @@ class VPSToolsApp:
                 self.ui.show_spinner("Limpando cache")
                 result = self.sys_actions.clear_cache()
                 if result is True:
-                    self.ui.print_success("Cache limpo!")
+                    self.ui.print_success(self.lang.t("tools.cache_cleaned", "Cache limpo!"))
                 else:
-                    self.ui.print_error(f"Erro ao limpar cache: {result}")
+                    self.ui.print_error(self.lang.t("tools.cache_error", "Erro ao limpar cache: {error}").format(error=result))
                 time.sleep(2)
             elif option == "4":
                 if not self._confirm("atualizacao do sistema"):
                     continue
-                self.ui.print_info("Iniciando atualizacao do sistema...")
+                self.ui.print_info(self.lang.t("tools.system_updating", "Iniciando atualizacao do sistema..."))
                 commands = self.sys_actions.update_system()
                 if not commands:
-                    self.ui.print_error("Nenhum gerenciador de pacotes suportado encontrado (apt/yum).")
+                    self.ui.print_error(self.lang.t("tools.pkg_not_found", "Nenhum gerenciador de pacotes suportado encontrado (apt/yum)."))
                     time.sleep(2)
                     continue
                 for cmd in commands:
-                    self.ui.print_info(f"Executando: {' '.join(cmd)}")
+                    self.ui.print_info(self.lang.t("tools.running", "Executando: {cmd}").format(cmd=" ".join(cmd)))
                     subprocess.run(cmd, check=False)
-                self.ui.print_success("Sistema atualizado!")
+                self.ui.print_success(self.lang.t("tools.system_updated", "Sistema atualizado!"))
                 time.sleep(2)
             elif option == "5":
                 if self._confirm("reinicio do servidor"):
                     self.sys_actions.reboot()
             elif option == "6":
                 if self._confirm("DESINSTALACAO COMPLETA"):
-                    self.ui.print_info("Executando desinstalacao completa...")
+                    self.ui.print_info(self.lang.t("tools.uninstall_running", "Executando desinstalacao completa..."))
                     uninstaller = CompleteUninstaller()
                     results = uninstaller.run()
                     summary = CompleteUninstaller.summarize(results)
                     self.ui.print_success(summary)
-                    self.ui.print_info("Verifique os logs/servicos para confirmar os itens com falha.")
+                    self.ui.print_info(self.lang.t("tools.check_logs", "Verifique os logs/servicos para confirmar os itens com falha."))
                     time.sleep(3)
             elif option == "7":
                 if not self._confirm("atualizacao do script"):
                     continue
-                self.ui.print_info("Atualizando script pelo git...")
+                self.ui.print_info(self.lang.t("tools.updating_git", "Atualizando script pelo git..."))
                 ok, msg = self.sys_actions.update_script(self.repo_dir)
                 if ok:
                     self.ui.print_success(msg)
@@ -730,12 +814,12 @@ class VPSToolsApp:
             elif option == "8":
                 if not self._confirm("criacao de comando global"):
                     continue
-                command_name = self.ui.prompt("Nome do comando global (ex: menu): ").strip()
+                command_name = self.ui.prompt(self.lang.t("tools.command_name_prompt", "Nome do comando global (ex: menu): ")).strip()
                 if not command_name:
-                    self.ui.print_error("Nome do comando nao pode ser vazio.")
+                    self.ui.print_error(self.lang.t("tools.command_name_empty", "Nome do comando nao pode ser vazio."))
                     time.sleep(2)
                     continue
-                self.ui.print_info(f"Criando comando global '{command_name}'...")
+                self.ui.print_info(self.lang.t("tools.command_creating", "Criando comando global '{name}'...").format(name=command_name))
                 ok, msg = self.sys_actions.create_menu_command(self.repo_dir, command_name)
                 if ok:
                     self.ui.print_success(msg)
@@ -745,11 +829,11 @@ class VPSToolsApp:
             elif option == "9":
                 if not self._confirm("criacao de swap"):
                     continue
-                size_text = self.ui.prompt("Tamanho da SWAP em MB (padrao 1024): ").strip()
+                size_text = self.ui.prompt(self.lang.t("tools.swap_size_prompt", "Tamanho da SWAP em MB (padrao 1024): ")).strip()
                 try:
                     size_mb = int(size_text) if size_text else 1024
                 except ValueError:
-                    self.ui.print_error("Valor invalido para tamanho da swap.")
+                    self.ui.print_error(self.lang.t("tools.swap_size_invalid", "Valor invalido para tamanho da swap."))
                     time.sleep(2)
                     continue
                 ok, msg = self.sys_actions.create_swap(size_mb=size_mb)
@@ -769,19 +853,19 @@ class VPSToolsApp:
                 if ok:
                     self.ui.console.print(
                         Panel(
-                            "[bold green]Resultado do teste[/bold green]\n\n"
-                            f"[white]Ping:[/white] [cyan]{data['ping_ms']} ms[/cyan]\n"
-                            f"[white]Download:[/white] [cyan]{data['download_mbps']} Mbps[/cyan]\n"
-                            f"[white]Upload:[/white] [cyan]{data['upload_mbps']} Mbps[/cyan]\n"
-                            f"[white]Amostra download:[/white] [cyan]{data['download_mb_tested']} MB[/cyan]\n"
-                            f"[white]Amostra upload:[/white] [cyan]{data['upload_mb_tested']} MB[/cyan]",
-                            title="VELOCIDADE",
+                            f"[bold green]{self.lang.t('tools.speed_result_title', 'Resultado do teste')}[/bold green]\n\n"
+                            f"[white]{self.lang.t('tools.speed_ping', 'Ping')}:[/white] [cyan]{data['ping_ms']} ms[/cyan]\n"
+                            f"[white]{self.lang.t('tools.speed_download', 'Download')}:[/white] [cyan]{data['download_mbps']} Mbps[/cyan]\n"
+                            f"[white]{self.lang.t('tools.speed_upload', 'Upload')}:[/white] [cyan]{data['upload_mbps']} Mbps[/cyan]\n"
+                            f"[white]{self.lang.t('tools.speed_sample_dl', 'Amostra download')}:[/white] [cyan]{data['download_mb_tested']} MB[/cyan]\n"
+                            f"[white]{self.lang.t('tools.speed_sample_ul', 'Amostra upload')}:[/white] [cyan]{data['upload_mb_tested']} MB[/cyan]",
+                            title=self.lang.t("tools.speed_title", "VELOCIDADE"),
                             border_style="green",
                         )
                     )
                 else:
-                    self.ui.print_error(f"Falha no teste: {data}")
-                self.ui.prompt("Pressione Enter para continuar...")
+                    self.ui.print_error(self.lang.t("tools.speed_failed", "Falha no teste: {error}").format(error=data))
+                self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
             elif option == "11":
                 self.power_tools_menu()
             elif option == "12":
@@ -789,39 +873,43 @@ class VPSToolsApp:
             elif option == "00":
                 break
             else:
-                self.ui.print_error("Opcao invalida!")
+                self.ui.print_error(self.lang.t("menu.invalid", "Opcao invalida!"))
                 time.sleep(2)
 
     def hosts_menu(self):
         while True:
             self.ui.clear()
             hosts = HostManager.list_hosts()
-            self.ui.print_info("Hosts atuais:")
+            self.ui.print_info(self.lang.t("tools.current_hosts", "Hosts atuais:"))
             for host in hosts:
                 self.ui.console.print(f" - {host}")
 
-            options = {"01": "ADICIONAR HOST", "02": "REMOVER HOST", "00": "VOLTAR"}
-            self.ui.draw_menu(options, "GERENCIAR HOSTS")
+            options = {
+                "01": self.lang.t("hosts.add", "ADICIONAR HOST"),
+                "02": self.lang.t("hosts.remove", "REMOVER HOST"),
+                "00": self.lang.t("menu.back", "VOLTAR"),
+            }
+            self.ui.draw_menu(options, self.lang.t("hosts.title", "GERENCIAR HOSTS"))
             option = self._normalize_option(self.ui.prompt())
 
             if option == "1":
                 if not self._confirm("adicao de host payload"):
                     continue
-                host = self.ui.prompt("Host a adicionar: ")
+                host = self.ui.prompt(self._txt("Host a adicionar: ", "Host to add: "))
                 HostManager.add_host(host)
-                self.ui.print_success("Host adicionado!")
+                self.ui.print_success(self.lang.t("tools.host_added", "Host adicionado!"))
                 time.sleep(2)
             elif option == "2":
                 if not self._confirm("remocao de host payload"):
                     continue
-                host = self.ui.prompt("Host a remover: ")
+                host = self.ui.prompt(self._txt("Host a remover: ", "Host to remove: "))
                 HostManager.remove_host(host)
-                self.ui.print_success("Host removido!")
+                self.ui.print_success(self.lang.t("tools.host_removed", "Host removido!"))
                 time.sleep(2)
             elif option == "00":
                 break
             else:
-                self.ui.print_error("Opcao invalida!")
+                self.ui.print_error(self.lang.t("menu.invalid", "Opcao invalida!"))
                 time.sleep(2)
 
     def about(self):
@@ -829,18 +917,18 @@ class VPSToolsApp:
         self.ui.console.print(
             Panel(
                 "[bold yellow]VPS TOOLS [red]PYTHON VERSION[/bold yellow]\n\n"
-                "[green]Baseado no script original da RDY SOFTWARE.\n"
-                "[blue]Reescrito em Python para melhor performance e estabilidade.\n\n"
+                f"[green]{self._txt('Baseado no script original da RDY SOFTWARE.', 'Based on the original RDY SOFTWARE script.')}\n"
+                f"[blue]{self._txt('Reescrito em Python para melhor performance e estabilidade.', 'Rewritten in Python for better performance and stability.')}\n\n"
                 "[cyan]Telegram: @rdysoftware",
-                title="SOBRE",
+                title=self.lang.t("about.title", "SOBRE"),
                 border_style="green",
             )
         )
-        self.ui.prompt("Pressione qualquer tecla para voltar...")
+        self.ui.prompt(self.lang.t("common.press_any_back", "Pressione qualquer tecla para voltar..."))
 
     def pre_install_check_menu(self):
-        service_name = self.ui.prompt("Servico para validar (SQUID/SSLH/STUNNEL/DROPBEAR): ").strip().lower()
-        ports_raw = self.ui.prompt("Portas separadas por virgula (ex: 80,443): ").strip()
+        service_name = self.ui.prompt(self.lang.t("precheck.service_prompt", "Servico para validar (SQUID/SSLH/STUNNEL/DROPBEAR): ")).strip().lower()
+        ports_raw = self.ui.prompt(self.lang.t("precheck.ports_prompt", "Portas separadas por virgula (ex: 80,443): ")).strip()
         ports = []
         for item in ports_raw.split(","):
             item = item.strip()
@@ -852,27 +940,27 @@ class VPSToolsApp:
                 pass
         ok, issues = self.power_tools.pre_install_validation(service_name, ports)
         if ok:
-            self.ui.print_success("Validacao pre-instalacao OK.")
+            self.ui.print_success(self.lang.t("precheck.ok", "Validacao pre-instalacao OK."))
         else:
-            self.ui.print_error("Falhas encontradas: " + "; ".join(issues))
+            self.ui.print_error(self.lang.t("precheck.fail", "Falhas encontradas: {issues}").format(issues="; ".join(issues)))
         time.sleep(2)
 
     def power_tools_menu(self):
         while True:
             self.ui.clear()
             options = {
-                "01": "PORT CHANGER",
-                "02": "STATUS DASHBOARD",
-                "03": "LOGS VIEWER",
-                "04": "BACKUP/RESTORE CONFIG",
-                "05": "FIREWALL MANAGER",
-                "06": "HEALTH CHECK",
-                "07": "ROLLBACK",
-                "08": "SETUP WIZARD",
-                "09": "IDIOMA / LANGUAGE",
-                "00": "VOLTAR",
+                "01": self.lang.t("power.port_changer", "PORT CHANGER"),
+                "02": self.lang.t("power.dashboard", "STATUS DASHBOARD"),
+                "03": self.lang.t("power.logs", "LOGS VIEWER"),
+                "04": self.lang.t("power.backup_restore", "BACKUP/RESTORE CONFIG"),
+                "05": self.lang.t("power.firewall", "FIREWALL MANAGER"),
+                "06": self.lang.t("power.health", "HEALTH CHECK"),
+                "07": self.lang.t("power.rollback", "ROLLBACK"),
+                "08": self.lang.t("power.wizard", "SETUP WIZARD"),
+                "09": self.lang.t("power.language", "IDIOMA / LANGUAGE"),
+                "00": self.lang.t("menu.back", "VOLTAR"),
             }
-            self.ui.draw_menu(options, "POWER TOOLS")
+            self.ui.draw_menu(options, self.lang.t("power.title", "POWER TOOLS"))
             option = self._normalize_option(self.ui.prompt())
 
             if option == "1":
@@ -896,17 +984,17 @@ class VPSToolsApp:
             elif option == "00":
                 break
             else:
-                self.ui.print_error("Opcao invalida!")
+                self.ui.print_error(self.lang.t("menu.invalid", "Opcao invalida!"))
                 time.sleep(1)
 
     def port_changer_menu(self):
         if not self._confirm("alteracao de portas"):
             return
-        service = self.ui.prompt("Servico (ssh/dropbear/squid/stunnel/sslh): ").strip().lower()
+        service = self.ui.prompt(self.lang.t("port_changer.service_prompt", "Servico (ssh/dropbear/squid/stunnel/sslh): ")).strip().lower()
         try:
-            port = int(self.ui.prompt("Nova porta: ").strip())
+            port = int(self.ui.prompt(self.lang.t("port_changer.new_port", "Nova porta: ")).strip())
         except ValueError:
-            self.ui.print_error("Porta invalida.")
+            self.ui.print_error(self.lang.t("common.invalid_port", "Porta invalida."))
             time.sleep(1)
             return
         ok, msg = self.power_tools.change_port(service, port)
@@ -917,8 +1005,8 @@ class VPSToolsApp:
         time.sleep(2)
 
     def dashboard_menu(self):
-        duration_raw = self.ui.prompt("Duracao do dashboard em segundos (padrao 20): ").strip()
-        interval_raw = self.ui.prompt("Intervalo de atualizacao em segundos (padrao 1.5): ").strip()
+        duration_raw = self.ui.prompt(self._txt("Duracao do dashboard em segundos (padrao 20): ", "Dashboard duration in seconds (default 20): ")).strip()
+        interval_raw = self.ui.prompt(self._txt("Intervalo de atualizacao em segundos (padrao 1.5): ", "Refresh interval in seconds (default 1.5): ")).strip()
         try:
             duration = int(duration_raw) if duration_raw else 20
         except ValueError:
@@ -937,24 +1025,24 @@ class VPSToolsApp:
             )
 
             table = Table(
-                title="[bold yellow]STATUS DASHBOARD[/bold yellow]",
+                title=f"[bold yellow]{self.lang.t('dashboard.title', 'STATUS DASHBOARD')}[/bold yellow]",
                 caption="[bold cyan]RDY SOFTWARE[/bold cyan]",
             )
-            table.add_column("Item", style="cyan")
-            table.add_column("Valor", style="white")
-            table.add_row("CPU", f"{data['cpu_percent']}%")
-            table.add_row("RAM", f"{data['mem_percent']}%")
-            table.add_row("SWAP", f"{data['swap_percent']}%")
-            table.add_row("DISCO", f"{data['disk_percent']}%")
-            table.add_row("NET ENVIADO", f"{data['net_sent_mb']} MB")
-            table.add_row("NET RECEBIDO", f"{data['net_recv_mb']} MB")
-            table.add_row("SESSOES", str(data["sessions"]))
+            table.add_column(self.lang.t("dashboard.item", "Item"), style="cyan")
+            table.add_column(self.lang.t("dashboard.value", "Valor"), style="white")
+            table.add_row(self.lang.t("dashboard.cpu", "CPU"), f"{data['cpu_percent']}%")
+            table.add_row(self.lang.t("dashboard.ram", "RAM"), f"{data['mem_percent']}%")
+            table.add_row(self.lang.t("dashboard.swap", "SWAP"), f"{data['swap_percent']}%")
+            table.add_row(self.lang.t("dashboard.disk", "DISCO"), f"{data['disk_percent']}%")
+            table.add_row(self.lang.t("dashboard.net_sent", "NET ENVIADO"), f"{data['net_sent_mb']} MB")
+            table.add_row(self.lang.t("dashboard.net_recv", "NET RECEBIDO"), f"{data['net_recv_mb']} MB")
+            table.add_row(self.lang.t("dashboard.sessions", "SESSOES"), str(data["sessions"]))
 
             st = Table(
-                title="[bold yellow]SERVICOS[/bold yellow]",
+                title=f"[bold yellow]{self.lang.t('dashboard.services', 'SERVICOS')}[/bold yellow]",
                 caption="[bold cyan]RDY SOFTWARE[/bold cyan]",
             )
-            st.add_column("Servico", style="cyan")
+            st.add_column(self.lang.t("dashboard.service_col", "Servico"), style="cyan")
             st.add_column("Status", style="white")
             for name, value in status.items():
                 st.add_row(name, value)
@@ -965,11 +1053,11 @@ class VPSToolsApp:
             while (time.time() - started) < duration:
                 time.sleep(interval)
                 live.update(render_frame())
-        self.ui.prompt("Enter para voltar...")
+        self.ui.prompt(self.lang.t("common.enter_back", "Enter para voltar..."))
 
     def logs_viewer_menu(self):
-        service = self.ui.prompt("Servico para logs (ex: squid): ").strip()
-        lines_raw = self.ui.prompt("Qtd linhas (padrao 80): ").strip()
+        service = self.ui.prompt(self.lang.t("logs.service_prompt", "Servico para logs (ex: squid): ")).strip()
+        lines_raw = self.ui.prompt(self.lang.t("logs.lines_prompt", "Qtd linhas (padrao 80): ")).strip()
         try:
             lines = int(lines_raw) if lines_raw else 80
         except ValueError:
@@ -980,40 +1068,40 @@ class VPSToolsApp:
             time.sleep(2)
             return
         self.ui.console.print(
-            Panel(logs[-6000:], title=f"LOGS: {service}", border_style="blue")
+            Panel(logs[-6000:], title=self.lang.t("logs.title", "LOGS: {service}").format(service=service), border_style="blue")
         )
-        if self._confirm("salvar logs em arquivo"):
-            path = self.ui.prompt("Caminho do arquivo: ").strip()
+        if self._confirm(self.lang.t("logs.save_confirm", "salvar logs em arquivo")):
+            path = self.ui.prompt(self.lang.t("logs.path_prompt", "Caminho do arquivo: ")).strip()
             try:
                 with open(path, "w") as f:
                     f.write(logs)
-                self.ui.print_success(f"Logs salvos em {path}")
+                self.ui.print_success(self.lang.t("logs.saved", "Logs salvos em {path}").format(path=path))
             except Exception as exc:
                 self.ui.print_error(str(exc))
-        self.ui.prompt("Enter para voltar...")
+        self.ui.prompt(self.lang.t("common.enter_back", "Enter para voltar..."))
 
     def config_backup_restore_menu(self):
-        option = self._normalize_option(self.ui.prompt("1 Backup / 2 Restore: "))
+        option = self._normalize_option(self.ui.prompt(self.lang.t("backup.menu_prompt", "1 Backup / 2 Restore: ")))
         if option == "1":
             if not self._confirm("backup de configuracoes"):
                 return
-            name = self.ui.prompt("Nome do backup: ").strip() or "backup"
+            name = self.ui.prompt(self.lang.t("backup.name_prompt", "Nome do backup: ")).strip() or "backup"
             ok, msg = self.power_tools.backup_configs(name)
             if ok:
-                self.ui.print_success(f"Backup criado: {msg}")
+                self.ui.print_success(self.lang.t("backup.created", "Backup criado: {msg}").format(msg=msg))
             else:
                 self.ui.print_error(msg)
         elif option == "2":
             if not self._confirm("restore de configuracoes"):
                 return
-            path = self.ui.prompt("Caminho do backup .tar.gz: ").strip()
+            path = self.ui.prompt(self.lang.t("backup.path_prompt", "Caminho do backup .tar.gz: ")).strip()
             ok, msg = self.power_tools.restore_configs(path)
             if ok:
                 self.ui.print_success(msg)
             else:
                 self.ui.print_error(msg)
         else:
-            self.ui.print_error("Opcao invalida.")
+            self.ui.print_error(self.lang.t("menu.invalid", "Opcao invalida!"))
         time.sleep(2)
 
     def firewall_menu(self):
@@ -1030,57 +1118,57 @@ class VPSToolsApp:
     def health_check_menu(self):
         report = self.power_tools.health_check()
         table = Table(title="[bold yellow]HEALTH CHECK[/bold yellow]", caption="[bold cyan]RDY SOFTWARE[/bold cyan]")
-        table.add_column("Check", style="cyan")
-        table.add_column("Resultado", style="white")
+        table.add_column(self._txt("Check", "Check"), style="cyan")
+        table.add_column(self._txt("Resultado", "Result"), style="white")
         for k, v in report.items():
             table.add_row(k, v)
         self.ui.console.print(table)
-        self.ui.prompt("Enter para voltar...")
+        self.ui.prompt(self.lang.t("common.enter_back", "Enter para voltar..."))
 
     def rollback_menu(self):
-        option = self._normalize_option(self.ui.prompt("1 Criar snapshot / 2 Restaurar: "))
+        option = self._normalize_option(self.ui.prompt(self.lang.t("rollback.menu_prompt", "1 Criar snapshot / 2 Restaurar: ")))
         if option == "1":
             if not self._confirm("snapshot de rollback"):
                 return
-            service = self.ui.prompt("Servico (ssh/dropbear/squid/sslh/stunnel): ").strip().lower()
+            service = self.ui.prompt(self.lang.t("rollback.service_prompt", "Servico (ssh/dropbear/squid/sslh/stunnel): ")).strip().lower()
             ok, msg = self.power_tools.save_rollback_snapshot(service)
             if ok:
-                self.ui.print_success(f"Snapshot salvo: {msg}")
+                self.ui.print_success(self.lang.t("rollback.saved", "Snapshot salvo: {msg}").format(msg=msg))
             else:
                 self.ui.print_error(msg)
         elif option == "2":
             if not self._confirm("restaurar rollback"):
                 return
-            service = self.ui.prompt("Servico (ssh/dropbear/squid/sslh/stunnel): ").strip().lower()
+            service = self.ui.prompt(self.lang.t("rollback.service_prompt", "Servico (ssh/dropbear/squid/sslh/stunnel): ")).strip().lower()
             snaps = self.power_tools.list_rollbacks(service)
             if not snaps:
-                self.ui.print_error("Nenhum snapshot encontrado.")
+                self.ui.print_error(self.lang.t("rollback.none", "Nenhum snapshot encontrado."))
                 time.sleep(2)
                 return
-            self.ui.console.print(Panel("\n".join(snaps), title="Snapshots"))
-            path = self.ui.prompt("Informe o caminho exato do snapshot: ").strip()
+            self.ui.console.print(Panel("\n".join(snaps), title=self.lang.t("rollback.snapshots", "Snapshots")))
+            path = self.ui.prompt(self.lang.t("rollback.path_prompt", "Informe o caminho exato do snapshot: ")).strip()
             ok, msg = self.power_tools.restore_rollback(path)
             if ok:
                 self.ui.print_success(msg)
             else:
                 self.ui.print_error(msg)
         else:
-            self.ui.print_error("Opcao invalida.")
+            self.ui.print_error(self.lang.t("menu.invalid", "Opcao invalida!"))
         time.sleep(2)
 
     def setup_wizard_menu(self):
         if not self._confirm("executar setup wizard"):
             return
-        self.ui.print_info("1) Atualizacao do script")
+        self.ui.print_info(self.lang.t("wizard.step1", "1) Atualizacao do script"))
         ok, msg = self.sys_actions.update_script(self.repo_dir)
         self.ui.print_success(msg) if ok else self.ui.print_error(msg)
 
-        self.ui.print_info("2) Validacao pre-instalacao")
+        self.ui.print_info(self.lang.t("wizard.step2", "2) Validacao pre-instalacao"))
         valid, issues = self.power_tools.pre_install_validation("wizard", [22, 80, 443])
         if not valid:
-            self.ui.print_error("Pendencias: " + "; ".join(issues))
+            self.ui.print_error(self.lang.t("wizard.pending", "Pendencias: {issues}").format(issues="; ".join(issues)))
         else:
-            self.ui.print_success("Validacao OK")
+            self.ui.print_success(self.lang.t("wizard.ok", "Validacao OK"))
 
         if self._confirm("criar swap 1024 MB"):
             ok, msg = self.sys_actions.create_swap(1024)
@@ -1089,31 +1177,32 @@ class VPSToolsApp:
         if self._confirm("criar comando global 'menu'"):
             ok, msg = self.sys_actions.create_menu_command(self.repo_dir, "menu")
             self.ui.print_success(msg) if ok else self.ui.print_error(msg)
-        self.ui.prompt("Setup finalizado. Enter para voltar...")
+        self.ui.prompt(self.lang.t("wizard.done", "Setup finalizado. Enter para voltar..."))
 
     def language_menu(self):
-        option = self.ui.prompt("Idioma (pt/en): ").strip().lower()
+        option = self.ui.prompt(self.lang.t("language.prompt", "Idioma (pt/en): ")).strip().lower()
         if self.lang.set_language(option):
+            self.ui.set_language(option)
             self.ui.print_success(self.lang.t("lang.changed", "Idioma alterado com sucesso."))
         else:
-            self.ui.print_error("Idioma invalido.")
+            self.ui.print_error(self.lang.t("lang.invalid", "Idioma invalido."))
         time.sleep(1)
 
     def domain_audit_service_menu(self):
         if not self._confirm("execucao de domain audit"):
             return
         service = self.services["DOMAIN_AUDIT"]
-        domain = self.ui.prompt("Dominio alvo (ex: exemplo.com): ").strip()
+        domain = self.ui.prompt(self.lang.t("domain.target_prompt", "Dominio alvo (ex: exemplo.com): ")).strip()
         if not domain:
-            self.ui.print_error("Dominio invalido.")
+            self.ui.print_error(self.lang.t("common.invalid_domain", "Dominio invalido."))
             time.sleep(1)
             return
 
-        ports = self.ui.prompt("Portas TLS (padrao 443): ").strip() or "443"
-        check_ssl = self.ui.prompt("Checar SSL/TLS? (s/n): ").strip().lower() == "s"
-        output = self.ui.prompt("Arquivo de saida (ex: audit.csv|audit.json): ").strip() or "domain_audit.csv"
+        ports = self.ui.prompt(self.lang.t("domain.ports_prompt", "Portas TLS (padrao 443): ")).strip() or "443"
+        check_ssl = self.ui.prompt(self.lang.t("domain.ssl_prompt", "Checar SSL/TLS? (s/n): ")).strip().lower() in {"s", "y", "yes", "sim"}
+        output = self.ui.prompt(self.lang.t("domain.output_prompt", "Arquivo de saida (ex: audit.csv|audit.json): ")).strip() or "domain_audit.csv"
 
-        self.ui.print_info("Executando domain audit...")
+        self.ui.print_info(self.lang.t("domain.run", "Executando domain audit..."))
         ok, msg = service.run_audit(
             domain=domain,
             ports=ports,
@@ -1123,8 +1212,8 @@ class VPSToolsApp:
         if ok:
             self.ui.print_success(msg)
         else:
-            self.ui.print_error(f"Domain audit falhou: {msg}")
-        self.ui.prompt("Pressione Enter para voltar...")
+            self.ui.print_error(self.lang.t("domain.failed", "Domain audit falhou: {msg}").format(msg=msg))
+        self.ui.prompt(self.lang.t("common.press_enter_back", "Pressione Enter para voltar..."))
 
 
 if __name__ == "__main__":

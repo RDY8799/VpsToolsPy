@@ -19,6 +19,13 @@ from rich.text import Text
 class TerminalUI:
     def __init__(self):
         self.console = Console()
+        self.lang = "pt"
+
+    def set_language(self, lang: str):
+        self.lang = lang if lang in {"pt", "en"} else "pt"
+
+    def _txt(self, pt: str, en: str) -> str:
+        return en if self.lang == "en" else pt
 
     def clear(self):
         self.console.clear()
@@ -41,7 +48,9 @@ class TerminalUI:
         )
         self.console.print(header)
 
-    def draw_menu(self, options, title="MENU PRINCIPAL"):
+    def draw_menu(self, options, title=None):
+        if title is None:
+            title = self._txt("MENU PRINCIPAL", "MAIN MENU")
         table = Table(
             title=f"[bold yellow]{title}[/bold yellow]",
             caption="[bold cyan]RDY SOFTWARE[/bold cyan]",
@@ -49,25 +58,27 @@ class TerminalUI:
             box=box.ROUNDED,
             expand=True,
         )
-        table.add_column("Option", style="cyan", justify="right", width=5)
-        table.add_column("Description", style="white")
+        table.add_column(self._txt("Opcao", "Option"), style="cyan", justify="right", width=8)
+        table.add_column(self._txt("Descricao", "Description"), style="white")
 
         for key, description in options.items():
             table.add_row(f"[{key}]", description)
 
         self.console.print(table)
 
-    def prompt(self, message="Escolha uma opcao: "):
+    def prompt(self, message=None):
+        if message is None:
+            message = self._txt("Escolha uma opcao: ", "Choose an option: ")
         return self.console.input(f"[bold yellow]{message}[/bold yellow]")
 
     def print_success(self, message):
-        self.console.print(f"[bold green][OK] {message}[/bold green]")
+        self.console.print(f"[bold green][{self._txt('OK', 'OK')}] {message}[/bold green]")
 
     def print_error(self, message):
-        self.console.print(f"[bold red][ERRO] {message}[/bold red]")
+        self.console.print(f"[bold red][{self._txt('ERRO', 'ERROR')}] {message}[/bold red]")
 
     def print_info(self, message):
-        self.console.print(f"[bold blue][INFO] {message}[/bold blue]")
+        self.console.print(f"[bold blue][{self._txt('INFO', 'INFO')}] {message}[/bold blue]")
 
     def show_spinner(self, message, duration=2):
         with self.console.status(f"[bold magenta]{message}...[/bold magenta]", spinner="dots"):
@@ -93,20 +104,20 @@ class TerminalUI:
                     progress.update(task_id, **kwargs)
 
             result = worker(update)
-            progress.update(task_id, completed=100, description="[green]Concluido[/green]")
+            progress.update(task_id, completed=100, description=f"[green]{self._txt('Concluido', 'Done')}[/green]")
             return result
 
     def draw_user_table(self, users):
         table = Table(
-            title="[bold blue]GERENCIAMENTO DE USUARIOS[/bold blue]",
+            title=f"[bold blue]{self._txt('GERENCIAMENTO DE USUARIOS', 'USER MANAGEMENT')}[/bold blue]",
             caption="[bold cyan]RDY SOFTWARE[/bold cyan]",
             box=box.HEAVY_EDGE,
         )
-        table.add_column("USUARIO", style="green")
-        table.add_column("SENHA", style="magenta")
-        table.add_column("EXPIRA EM", style="blue")
-        table.add_column("LOGINS", style="yellow")
-        table.add_column("CONECTADO", style="cyan")
+        table.add_column(self._txt("USUARIO", "USER"), style="green")
+        table.add_column(self._txt("SENHA", "PASSWORD"), style="magenta")
+        table.add_column(self._txt("EXPIRA EM", "EXPIRES"), style="blue")
+        table.add_column(self._txt("LOGINS", "LOGINS"), style="yellow")
+        table.add_column(self._txt("CONECTADO", "CONNECTED"), style="cyan")
 
         for user in users:
             table.add_row(
@@ -147,25 +158,26 @@ class TerminalUI:
     def select_user(self, users, action_label="acao"):
         usernames = [u["username"] if isinstance(u, dict) else str(u) for u in users]
         if not usernames:
-            self.print_error("Nenhum usuario disponivel.")
+            self.print_error(self._txt("Nenhum usuario disponivel.", "No users available."))
             return None
 
         if os.name == "nt" or (not sys.stdin.isatty()):
-            return self.prompt(f"Usuario para {action_label}: ").strip()
+            label = self._txt("Usuario para", "User for")
+            return self.prompt(f"{label} {action_label}: ").strip()
 
         index = 0
         typed_name = ""
         while True:
             self.clear()
             table = Table(
-                title=f"[bold yellow]SELECIONAR USUARIO ({action_label})[/bold yellow]",
-                caption="[bold cyan]Use setas + Enter, ou digite o nome manualmente[/bold cyan]",
+                title=f"[bold yellow]{self._txt('SELECIONAR USUARIO', 'SELECT USER')} ({action_label})[/bold yellow]",
+                caption=f"[bold cyan]{self._txt('Use setas + Enter, ou digite o nome manualmente', 'Use arrows + Enter, or type the name manually')}[/bold cyan]",
                 show_header=False,
                 box=box.ROUNDED,
                 expand=True,
             )
             table.add_column("Pick", style="cyan", width=6)
-            table.add_column("Usuario", style="white")
+            table.add_column(self._txt("Usuario", "User"), style="white")
 
             start = max(0, index - 8)
             end = min(len(usernames), start + 16)
@@ -175,8 +187,8 @@ class TerminalUI:
             self.console.print(table)
 
             self.console.print(
-                f"[yellow]Digitado:[/yellow] [white]{typed_name or '(vazio)'}[/white]  "
-                "[blue]|[/blue] [yellow]ESC:[/yellow] cancelar"
+                f"[yellow]{self._txt('Digitado:', 'Typed:')}[/yellow] [white]{typed_name or self._txt('(vazio)', '(empty)')}[/white]  "
+                f"[blue]|[/blue] [yellow]ESC:[/yellow] {self._txt('cancelar', 'cancel')}"
             )
 
             key = self._read_key_posix()
