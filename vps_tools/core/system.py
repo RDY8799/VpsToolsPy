@@ -1,4 +1,5 @@
 import os
+import shutil
 import socket
 import subprocess
 
@@ -107,3 +108,69 @@ class SystemActions:
                 ['yum', 'clean', 'all'],
             ]
         return []
+
+    @staticmethod
+    def update_script(repo_dir: str):
+        if shutil.which('git') is None:
+            return False, "Git nao encontrado no sistema."
+        if not os.path.isdir(repo_dir):
+            return False, f"Diretorio do repositorio nao encontrado: {repo_dir}"
+
+        result = subprocess.run(
+            ['git', '-C', repo_dir, 'rev-parse', '--is-inside-work-tree'],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return False, "Diretorio informado nao e um repositorio git."
+
+        fetch = subprocess.run(
+            ['git', '-C', repo_dir, 'fetch', '--all'],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if fetch.returncode != 0:
+            return False, fetch.stderr.strip() or "Falha no git fetch."
+
+        pull = subprocess.run(
+            ['git', '-C', repo_dir, 'pull', '--ff-only'],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if pull.returncode != 0:
+            return False, pull.stderr.strip() or "Falha no git pull."
+        message = (pull.stdout or "").strip() or "Script atualizado com sucesso."
+        return True, message
+
+    @staticmethod
+    def create_menu_command(repo_dir: str, command_name: str = 'menu'):
+        if os.name == 'nt':
+            return False, "Comando global automatico nao suportado no Windows."
+        if not os.path.isdir(repo_dir):
+            return False, f"Diretorio do repositorio nao encontrado: {repo_dir}"
+
+        current = shutil.which(command_name)
+        target = f"/usr/local/bin/{command_name}"
+        if current and current != target:
+            return False, f"O comando '{command_name}' ja existe em {current}."
+
+        launcher = (
+            "#!/usr/bin/env bash\n"
+            "set -e\n"
+            f'REPO_DIR="{repo_dir}"\n'
+            'cd "$REPO_DIR"\n'
+            'if [ -x "$REPO_DIR/.venv/bin/python" ]; then\n'
+            '  exec "$REPO_DIR/.venv/bin/python" -m vps_tools.main "$@"\n'
+            "fi\n"
+            'exec python3 -m vps_tools.main "$@"\n'
+        )
+        try:
+            with open(target, 'w') as f:
+                f.write(launcher)
+            os.chmod(target, 0o755)
+            return True, f"Comando '{command_name}' criado em {target}"
+        except Exception as exc:
+            return False, str(exc)

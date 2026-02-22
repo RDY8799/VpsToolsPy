@@ -32,6 +32,18 @@ class VPSToolsApp:
             "BADVPN": BadVPNService(),
             "TROJAN": TrojanService(),
         }
+        self.repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    @staticmethod
+    def _normalize_option(value: str) -> str:
+        value = (value or "").strip()
+        if not value:
+            return value
+        if value == "00":
+            return "00"
+        if value.isdigit():
+            return str(int(value))
+        return value.lower()
 
     def main_menu(self):
         while True:
@@ -54,15 +66,15 @@ class VPSToolsApp:
             }
             self.ui.draw_menu(options)
 
-            option = self.ui.prompt()
+            option = self._normalize_option(self.ui.prompt())
 
-            if option == "01":
+            if option == "1":
                 self.installer_menu()
-            elif option == "02":
+            elif option == "2":
                 self.user_manager_menu()
-            elif option == "03":
+            elif option == "3":
                 self.tools_menu()
-            elif option == "04":
+            elif option == "4":
                 self.about()
             elif option == "00":
                 sys.exit(0)
@@ -88,9 +100,9 @@ class VPSToolsApp:
                 "00": "VOLTAR",
             }
             self.ui.draw_menu(options, "GERENCIAMENTO DE USUARIOS")
-            option = self.ui.prompt()
+            option = self._normalize_option(self.ui.prompt())
 
-            if option == "01":
+            if option == "1":
                 username = self.ui.prompt("Nome do novo usuario: ")
                 password = self.ui.prompt("Senha para o usuario: ")
                 days = self.ui.prompt("Dias para expirar: ")
@@ -102,7 +114,7 @@ class VPSToolsApp:
                     self.ui.print_error(f"Erro: {result}")
                 time.sleep(2)
 
-            elif option == "02":
+            elif option == "2":
                 username = self.ui.prompt("Nome do usuario a deletar: ")
                 result = self.user_manager.delete_user(username)
                 if result is True:
@@ -111,7 +123,7 @@ class VPSToolsApp:
                     self.ui.print_error(f"Erro: {result}")
                 time.sleep(2)
 
-            elif option == "03":
+            elif option == "3":
                 username = self.ui.prompt("Nome do usuario: ")
                 new_limit = self.ui.prompt("Novo limite de logins: ")
                 result = self.user_manager.change_limit(username, new_limit)
@@ -121,7 +133,7 @@ class VPSToolsApp:
                     self.ui.print_error(f"Erro: {result}")
                 time.sleep(2)
 
-            elif option == "04":
+            elif option == "4":
                 username = self.ui.prompt("Nome do usuario: ")
                 year = self.ui.prompt("Ano (YYYY): ")
                 month = self.ui.prompt("Mes (MM): ")
@@ -133,7 +145,7 @@ class VPSToolsApp:
                     self.ui.print_error(f"Erro: {result}")
                 time.sleep(2)
 
-            elif option == "05":
+            elif option == "5":
                 username = self.ui.prompt("Nome do usuario: ")
                 new_password = self.ui.prompt("Nova senha: ")
                 result = self.user_manager.change_password(username, new_password)
@@ -143,7 +155,7 @@ class VPSToolsApp:
                     self.ui.print_error(f"Erro: {result}")
                 time.sleep(2)
 
-            elif option == "06":
+            elif option == "6":
                 username = self.ui.prompt("Nome do usuario: ")
                 if self.user_manager.disconnect_user(username):
                     self.ui.print_success(f"Usuario {username} desconectado!")
@@ -151,7 +163,7 @@ class VPSToolsApp:
                     self.ui.print_error(f"Nao foi possivel desconectar {username}.")
                 time.sleep(2)
 
-            elif option == "07":
+            elif option == "7":
                 name = self.ui.prompt("Nome para o arquivo de backup: ")
                 path = self.user_manager.backup_users(name)
                 if isinstance(path, str) and path.startswith("Erro"):
@@ -160,7 +172,7 @@ class VPSToolsApp:
                     self.ui.print_success(f"Backup criado em: {path}")
                 time.sleep(2)
 
-            elif option == "08":
+            elif option == "8":
                 file_path = self.ui.prompt("Caminho completo do backup: ")
                 if self.user_manager.restore_backup(file_path):
                     self.ui.print_success("Backup restaurado com sucesso!")
@@ -189,7 +201,7 @@ class VPSToolsApp:
             options["00"] = "VOLTAR"
             self.ui.draw_menu(options, "MENU DE INSTALACAO")
 
-            option = self.ui.prompt()
+            option = self._normalize_option(self.ui.prompt())
             if option == "00":
                 break
 
@@ -220,9 +232,9 @@ class VPSToolsApp:
                 }
 
             self.ui.draw_menu(options, f"{service_name} ({status})")
-            option = self.ui.prompt()
+            option = self._normalize_option(self.ui.prompt())
 
-            if option == "01":
+            if option == "1":
                 if not is_installed:
                     self.install_service_flow(service_name)
                 else:
@@ -233,11 +245,11 @@ class VPSToolsApp:
                         service.start()
                         self.ui.print_success("Servico iniciado!")
                 time.sleep(2)
-            elif option == "02" and is_installed:
+            elif option == "2" and is_installed:
                 service.restart()
                 self.ui.print_success("Servico reiniciado!")
                 time.sleep(2)
-            elif option == "03" and is_installed:
+            elif option == "3" and is_installed:
                 service.uninstall()
                 self.ui.print_success("Servico desinstalado!")
                 time.sleep(2)
@@ -301,19 +313,21 @@ class VPSToolsApp:
                 "04": "ATUALIZAR SISTEMA",
                 "05": "REINICIAR SERVIDOR",
                 "06": "DESINSTALACAO COMPLETA",
+                "07": "ATUALIZAR SCRIPT",
+                "08": "CRIAR COMANDO 'menu'",
                 "00": "VOLTAR",
             }
             self.ui.draw_menu(options, "FERRAMENTAS")
-            option = self.ui.prompt()
+            option = self._normalize_option(self.ui.prompt())
 
-            if option == "01":
+            if option == "1":
                 banner_text = self.ui.prompt("Texto do Banner: ")
                 BannerManager.set_banner(banner_text)
                 self.ui.print_success("Banner atualizado!")
                 time.sleep(2)
-            elif option == "02":
+            elif option == "2":
                 self.hosts_menu()
-            elif option == "03":
+            elif option == "3":
                 self.ui.show_spinner("Limpando cache")
                 result = self.sys_actions.clear_cache()
                 if result is True:
@@ -321,7 +335,7 @@ class VPSToolsApp:
                 else:
                     self.ui.print_error(f"Erro ao limpar cache: {result}")
                 time.sleep(2)
-            elif option == "04":
+            elif option == "4":
                 self.ui.print_info("Iniciando atualizacao do sistema...")
                 commands = self.sys_actions.update_system()
                 if not commands:
@@ -333,11 +347,11 @@ class VPSToolsApp:
                     subprocess.run(cmd, check=False)
                 self.ui.print_success("Sistema atualizado!")
                 time.sleep(2)
-            elif option == "05":
+            elif option == "5":
                 confirm = self.ui.prompt("Tem certeza que deseja reiniciar? (s/n): ").lower()
                 if confirm == "s":
                     self.sys_actions.reboot()
-            elif option == "06":
+            elif option == "6":
                 confirm = self.ui.prompt("Confirma DESINSTALACAO COMPLETA? (s/n): ").lower()
                 if confirm == "s":
                     self.ui.print_info("Executando desinstalacao completa...")
@@ -347,6 +361,22 @@ class VPSToolsApp:
                     self.ui.print_success(summary)
                     self.ui.print_info("Verifique os logs/servicos para confirmar os itens com falha.")
                     time.sleep(3)
+            elif option == "7":
+                self.ui.print_info("Atualizando script pelo git...")
+                ok, msg = self.sys_actions.update_script(self.repo_dir)
+                if ok:
+                    self.ui.print_success(msg)
+                else:
+                    self.ui.print_error(msg)
+                time.sleep(2)
+            elif option == "8":
+                self.ui.print_info("Criando comando global 'menu'...")
+                ok, msg = self.sys_actions.create_menu_command(self.repo_dir, "menu")
+                if ok:
+                    self.ui.print_success(msg)
+                else:
+                    self.ui.print_error(msg)
+                time.sleep(2)
             elif option == "00":
                 break
             else:
@@ -363,14 +393,14 @@ class VPSToolsApp:
 
             options = {"01": "ADICIONAR HOST", "02": "REMOVER HOST", "00": "VOLTAR"}
             self.ui.draw_menu(options, "GERENCIAR HOSTS")
-            option = self.ui.prompt()
+            option = self._normalize_option(self.ui.prompt())
 
-            if option == "01":
+            if option == "1":
                 host = self.ui.prompt("Host a adicionar: ")
                 HostManager.add_host(host)
                 self.ui.print_success("Host adicionado!")
                 time.sleep(2)
-            elif option == "02":
+            elif option == "2":
                 host = self.ui.prompt("Host a remover: ")
                 HostManager.remove_host(host)
                 self.ui.print_success("Host removido!")
