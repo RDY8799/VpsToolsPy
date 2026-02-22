@@ -13,6 +13,7 @@ from vps_tools.core.uninstaller import CompleteUninstaller
 from vps_tools.core.users import UserManager
 from vps_tools.core.utils import BannerManager, HostManager
 from vps_tools.services.badvpn import BadVPNService
+from vps_tools.services.domain_audit import DomainAuditService
 from vps_tools.services.dropbear import DropbearService
 from vps_tools.services.dnstt import DNSTTService
 from vps_tools.services.hysteria import HysteriaService
@@ -34,6 +35,7 @@ class VPSToolsApp:
         self.power_tools = PowerTools()
         self.lang = LanguageManager("pt")
         self.user_manager = UserManager()
+        self.repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.services = {
             "SQUID": SquidService(),
             "SSLH": SSLHService(),
@@ -46,8 +48,8 @@ class VPSToolsApp:
             "DNSTT": DNSTTService(),
             "BADVPN": BadVPNService(),
             "TROJAN": TrojanService(),
+            "DOMAIN_AUDIT": DomainAuditService(self.repo_dir),
         }
-        self.repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     @staticmethod
     def _normalize_option(value: str) -> str:
@@ -348,6 +350,10 @@ class VPSToolsApp:
                 time.sleep(2)
 
     def generic_service_menu(self, service_name):
+        if service_name == "DOMAIN_AUDIT":
+            self.domain_audit_service_menu()
+            return
+
         service = self.services[service_name]
         while True:
             self.ui.clear()
@@ -658,6 +664,7 @@ class VPSToolsApp:
                 "09": "CRIAR SWAP",
                 "10": "TESTE DE VELOCIDADE",
                 "11": "POWER TOOLS",
+                "12": "DOMAIN AUDIT",
                 "00": "VOLTAR",
             }
             self.ui.draw_menu(options, "FERRAMENTAS")
@@ -775,6 +782,8 @@ class VPSToolsApp:
                 self.ui.prompt("Pressione Enter para continuar...")
             elif option == "11":
                 self.power_tools_menu()
+            elif option == "12":
+                self.domain_audit_service_menu()
             elif option == "00":
                 break
             else:
@@ -1066,6 +1075,40 @@ class VPSToolsApp:
         else:
             self.ui.print_error("Idioma invalido.")
         time.sleep(1)
+
+    def domain_audit_service_menu(self):
+        if not self._confirm("execucao de domain audit"):
+            return
+        script = os.path.join(self.repo_dir, "domain_audit.py")
+        if not os.path.exists(script):
+            self.ui.print_error(f"Script nao encontrado: {script}")
+            time.sleep(2)
+            return
+
+        domain = self.ui.prompt("Dominio alvo (ex: exemplo.com): ").strip()
+        if not domain:
+            self.ui.print_error("Dominio invalido.")
+            time.sleep(1)
+            return
+
+        ports = self.ui.prompt("Portas TLS (padrao 443): ").strip() or "443"
+        check_ssl = self.ui.prompt("Checar SSL/TLS? (s/n): ").strip().lower() == "s"
+        wordlist = self.ui.prompt("Wordlist (opcional): ").strip()
+        output = self.ui.prompt("Arquivo de saida (ex: audit.csv|audit.json): ").strip() or "domain_audit.csv"
+
+        cmd = [sys.executable, script, "--domain", domain, "--ports", ports, "--output", output]
+        if check_ssl:
+            cmd.append("--check-ssl")
+        if wordlist:
+            cmd.extend(["--wordlist", wordlist])
+
+        self.ui.print_info("Executando domain audit...")
+        result = subprocess.run(cmd, check=False, cwd=self.repo_dir)
+        if result.returncode == 0:
+            self.ui.print_success(f"Domain audit concluido. Saida: {output}")
+        else:
+            self.ui.print_error(f"Domain audit falhou (codigo {result.returncode}).")
+        self.ui.prompt("Pressione Enter para voltar...")
 
 
 if __name__ == "__main__":
