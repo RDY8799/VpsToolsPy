@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 
 from vps_tools.core.system import SystemActions
@@ -39,6 +40,24 @@ class BannerManager:
 
 class HostManager:
     @staticmethod
+    def _reload_squid():
+        # Try binary-based reconfigure first (common on Debian/Ubuntu).
+        for binary in ("squid", "squid3"):
+            if shutil.which(binary):
+                if subprocess.run([binary, "-k", "reconfigure"], check=False).returncode == 0:
+                    return True
+
+        # Fallback to service manager names.
+        for service in ("squid", "squid3"):
+            if subprocess.run(["systemctl", "reload", service], check=False).returncode == 0:
+                return True
+            if subprocess.run(["service", service, "reconfigure"], check=False).returncode == 0:
+                return True
+            if subprocess.run(["service", service, "restart"], check=False).returncode == 0:
+                return True
+        return False
+
+    @staticmethod
     def add_host(host):
         path = "/etc/rdy/payloads"
         os.makedirs("/etc/rdy", exist_ok=True)
@@ -49,8 +68,8 @@ class HostManager:
         with open(path, "a") as f:
             f.write(f"{host}\n")
 
-        # Reload Squid if installed
-        subprocess.run(["squid", "-k", "reconfigure"], check=False)
+        # Reload Squid if available; if not, keep host list persisted.
+        HostManager._reload_squid()
         return True
 
     @staticmethod
@@ -67,7 +86,7 @@ class HostManager:
                 if line.strip() != host:
                     f.write(line)
 
-        subprocess.run(["squid", "-k", "reconfigure"], check=False)
+        HostManager._reload_squid()
         return True
 
     @staticmethod
