@@ -3,6 +3,8 @@ import subprocess
 import sys
 import time
 
+from rich.console import Group
+from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
 
@@ -915,16 +917,29 @@ class VPSToolsApp:
         time.sleep(2)
 
     def dashboard_menu(self):
-        loops_raw = self.ui.prompt("Quantas atualizacoes? (padrao 10): ").strip()
+        duration_raw = self.ui.prompt("Duracao do dashboard em segundos (padrao 20): ").strip()
+        interval_raw = self.ui.prompt("Intervalo de atualizacao em segundos (padrao 1.5): ").strip()
         try:
-            loops = int(loops_raw) if loops_raw else 10
+            duration = int(duration_raw) if duration_raw else 20
         except ValueError:
-            loops = 10
-        for _ in range(max(1, loops)):
-            self.ui.clear()
+            duration = 20
+        try:
+            interval = float(interval_raw) if interval_raw else 1.5
+        except ValueError:
+            interval = 1.5
+        duration = max(5, duration)
+        interval = max(0.5, interval)
+
+        def render_frame():
             data = self.power_tools.dashboard_snapshot()
-            status = self.power_tools.service_status_map(["ssh", "dropbear", "squid", "sslh", "stunnel4", "trojan"])
-            table = Table(title="[bold yellow]STATUS DASHBOARD[/bold yellow]", caption="[bold cyan]RDY SOFTWARE[/bold cyan]")
+            status = self.power_tools.service_status_map(
+                ["ssh", "dropbear", "squid", "sslh", "stunnel4", "trojan", "openvpn", "xray"]
+            )
+
+            table = Table(
+                title="[bold yellow]STATUS DASHBOARD[/bold yellow]",
+                caption="[bold cyan]RDY SOFTWARE[/bold cyan]",
+            )
             table.add_column("Item", style="cyan")
             table.add_column("Valor", style="white")
             table.add_row("CPU", f"{data['cpu_percent']}%")
@@ -934,14 +949,22 @@ class VPSToolsApp:
             table.add_row("NET ENVIADO", f"{data['net_sent_mb']} MB")
             table.add_row("NET RECEBIDO", f"{data['net_recv_mb']} MB")
             table.add_row("SESSOES", str(data["sessions"]))
-            self.ui.console.print(table)
-            st = Table(title="[bold yellow]SERVICOS[/bold yellow]", caption="[bold cyan]RDY SOFTWARE[/bold cyan]")
+
+            st = Table(
+                title="[bold yellow]SERVICOS[/bold yellow]",
+                caption="[bold cyan]RDY SOFTWARE[/bold cyan]",
+            )
             st.add_column("Servico", style="cyan")
             st.add_column("Status", style="white")
             for name, value in status.items():
                 st.add_row(name, value)
-            self.ui.console.print(st)
-            time.sleep(1)
+            return Group(table, st)
+
+        started = time.time()
+        with Live(render_frame(), console=self.ui.console, refresh_per_second=4, screen=False) as live:
+            while (time.time() - started) < duration:
+                time.sleep(interval)
+                live.update(render_frame())
         self.ui.prompt("Enter para voltar...")
 
     def logs_viewer_menu(self):

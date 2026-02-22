@@ -267,29 +267,60 @@ class SystemActions:
 
             # Download test
             update(20, "Testando download")
-            download_url = "https://speed.hetzner.de/10MB.bin"
             total_read = 0
             target_bytes = 5 * 1024 * 1024  # 5 MB for faster test
+            download_urls = [
+                "https://proof.ovh.net/files/10Mb.dat",
+                "https://ash-speed.hetzner.com/10MB.bin",
+                "https://raw.githubusercontent.com/github/gitignore/main/Python.gitignore",
+            ]
             start = time.perf_counter()
-            with requests.get(download_url, stream=True, timeout=20) as response:
-                response.raise_for_status()
-                for chunk in response.iter_content(chunk_size=64 * 1024):
-                    if not chunk:
-                        continue
-                    total_read += len(chunk)
-                    ratio = min(1.0, total_read / target_bytes)
-                    update(20 + int(ratio * 45), "Testando download")
-                    if total_read >= target_bytes:
+            last_download_error = "Falha em todas as fontes de download."
+            for download_url in download_urls:
+                try:
+                    total_read = 0
+                    with requests.get(download_url, stream=True, timeout=20) as response:
+                        response.raise_for_status()
+                        for chunk in response.iter_content(chunk_size=64 * 1024):
+                            if not chunk:
+                                continue
+                            total_read += len(chunk)
+                            ratio = min(1.0, total_read / target_bytes)
+                            update(20 + int(ratio * 45), f"Testando download ({download_url})")
+                            if total_read >= target_bytes:
+                                break
+                    if total_read > 0:
                         break
+                except Exception as exc:
+                    last_download_error = str(exc)
+                    continue
+            if total_read <= 0:
+                return False, f"Falha no download: {last_download_error}"
             download_seconds = max(time.perf_counter() - start, 0.001)
             download_mbps = round((total_read * 8) / (download_seconds * 1_000_000), 2)
 
             # Upload test
             update(70, "Testando upload")
             payload = os.urandom(2 * 1024 * 1024)  # 2 MB
+            upload_urls = [
+                "https://httpbin.org/post",
+                "https://eu.httpbin.org/post",
+                "https://postman-echo.com/post",
+            ]
             start = time.perf_counter()
-            response = requests.post("https://httpbin.org/post", data=payload, timeout=25)
-            response.raise_for_status()
+            last_upload_error = "Falha em todas as fontes de upload."
+            upload_ok = False
+            for upload_url in upload_urls:
+                try:
+                    response = requests.post(upload_url, data=payload, timeout=25)
+                    response.raise_for_status()
+                    upload_ok = True
+                    break
+                except Exception as exc:
+                    last_upload_error = str(exc)
+                    continue
+            if not upload_ok:
+                return False, f"Falha no upload: {last_upload_error}"
             upload_seconds = max(time.perf_counter() - start, 0.001)
             upload_mbps = round((len(payload) * 8) / (upload_seconds * 1_000_000), 2)
             update(95, "Finalizando")
