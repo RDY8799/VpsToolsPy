@@ -48,7 +48,7 @@ class VPSToolsApp:
             "DNSTT": DNSTTService(),
             "BADVPN": BadVPNService(),
             "TROJAN": TrojanService(),
-            "DOMAIN_AUDIT": DomainAuditService(self.repo_dir),
+            "DOMAIN_AUDIT": DomainAuditService(),
         }
 
     @staticmethod
@@ -1079,12 +1079,7 @@ class VPSToolsApp:
     def domain_audit_service_menu(self):
         if not self._confirm("execucao de domain audit"):
             return
-        script = os.path.join(self.repo_dir, "domain_audit.py")
-        if not os.path.exists(script):
-            self.ui.print_error(f"Script nao encontrado: {script}")
-            time.sleep(2)
-            return
-
+        service = self.services["DOMAIN_AUDIT"]
         domain = self.ui.prompt("Dominio alvo (ex: exemplo.com): ").strip()
         if not domain:
             self.ui.print_error("Dominio invalido.")
@@ -1093,21 +1088,19 @@ class VPSToolsApp:
 
         ports = self.ui.prompt("Portas TLS (padrao 443): ").strip() or "443"
         check_ssl = self.ui.prompt("Checar SSL/TLS? (s/n): ").strip().lower() == "s"
-        wordlist = self.ui.prompt("Wordlist (opcional): ").strip()
         output = self.ui.prompt("Arquivo de saida (ex: audit.csv|audit.json): ").strip() or "domain_audit.csv"
 
-        cmd = [sys.executable, script, "--domain", domain, "--ports", ports, "--output", output]
-        if check_ssl:
-            cmd.append("--check-ssl")
-        if wordlist:
-            cmd.extend(["--wordlist", wordlist])
-
         self.ui.print_info("Executando domain audit...")
-        result = subprocess.run(cmd, check=False, cwd=self.repo_dir)
-        if result.returncode == 0:
-            self.ui.print_success(f"Domain audit concluido. Saida: {output}")
+        ok, msg = service.run_audit(
+            domain=domain,
+            ports=ports,
+            check_ssl=check_ssl,
+            output=output,
+        )
+        if ok:
+            self.ui.print_success(msg)
         else:
-            self.ui.print_error(f"Domain audit falhou (codigo {result.returncode}).")
+            self.ui.print_error(f"Domain audit falhou: {msg}")
         self.ui.prompt("Pressione Enter para voltar...")
 
 
