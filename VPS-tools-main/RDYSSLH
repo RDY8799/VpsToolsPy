@@ -1,0 +1,280 @@
+#!/bin/bash
+
+# curl -o /bin/menu -H "Cache-Control: no-cache" -L "https://raw.githubusercontent.com/RDY8799/VPS-tools/main/git_menu" && chmod +x /bin/git_menu && git_menu
+
+# Caminho do arquivo
+file_path="/etc/default/sslh"
+
+# Função para mostrar o menu
+show_menu() {
+    # Verifica se o arquivo existe e tem permissões de escrita
+    if [ ! -f "$file_path" ] || [ ! -w "$file_path" ]; then
+        echo -e "${red}Erro: Não é possível acessar o arquivo $file_path para escrita.${f}"
+        exit 1
+    fi
+    clear
+    echo -e "${blue}Menu de alteração de portas do SSLH${f}"
+    echo "-----------------------------------"
+    echo -e "${green}Portas Atuais:${f}"
+    echo -e "SSH: $(grep -oP -- '--ssh\s+127\.0\.0\.1:\K[0-9]+' "$file_path")"
+    echo -e "HTTP: $(grep -oP -- '--http\s+127\.0\.0\.1:\K[0-9]+' "$file_path")"
+    echo -e "SSL: $(grep -oP -- '--ssl\s+127\.0\.0\.1:\K[0-9]+' "$file_path")"
+    echo -e "OpenVPN: $(grep -oP -- '--openvpn\s+127\.0\.0\.1:\K[0-9]+' "$file_path")"
+    echo -e "SSLH: $(grep -oP -- 'sslh\s+--listen\s+0\.0\.0\.0:\K[0-9]+' "$file_path")${f}"
+    echo "-----------------------------------"
+    echo -e "${yellow}1. Alterar porta SSH${f}"
+    echo -e "${yellow}2. Alterar porta HTTP${f}"
+    echo -e "${yellow}3. Alterar porta SSL${f}"
+    echo -e "${yellow}4. Alterar porta OpenVPN${f}"
+    echo -e "${yellow}5. Alterar porta SSLH${f}"
+    echo -e "${yellow}6. Voltar ao menu${f}"
+    echo "-----------------------------------"
+    echo -n "Escolha uma opção: "
+    
+    # Loop principal
+    read -r choice
+    case $choice in
+        1) protocol="--ssh" ;;
+        2) protocol="--http" ;;
+        3) protocol="--ssl" ;;
+        4) protocol="--openvpn" ;;
+        5) protocol="--listen" ;;
+        6) menu ;; # Chama a função para mostrar o menu novamente
+        *) echo -e "${red}Opção inválida!${f}"; show_menu ;;
+    esac
+    
+    if [[ "$protocol" != "--listen" ]]; then
+        echo -e "${yellow}Insira a nova porta para o protocolo $protocol:${f}"
+    else
+        echo -e "${yellow}Insira a nova porta para SSLH:${f}"
+    fi
+    
+    read -r new_port
+    
+    # Verifica se a nova porta é um número
+    if ! [[ $new_port =~ ^[0-9]+$ ]]; then
+        echo -e "${red}Erro: A porta deve ser um número.${f}"
+        sleep 2
+        show_menu
+    fi
+    
+    # Atualiza a porta no arquivo
+    if [[ "$protocol" == "--listen" ]]; then
+        sed -i -E "s@(sslh\s+--listen\s+0\.0\.0\.0:)[0-9]+@\1$new_port@" "$file_path"
+    else
+        sed -i -E "s@($protocol\s+[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:)[0-9]+@\1$new_port@" "$file_path"
+    fi
+    
+    if [[ "$protocol" == "--listen" ]]; then
+        # restart service
+        systemctl restart sslh >> /dev/null 2>&1
+        echo -e "${green}A porta para SSLH foi atualizada com sucesso!${f}"
+        echo -ne "${white}//${yellow}//${green}//${mag}//    ${green}Pressione uma tecla para retornar ao menu inicial...$f"; read -n1 -r -p "";
+        RDYSSLH
+    else
+        echo -e "${green}A porta para o protocolo $protocol foi atualizada com sucesso!${f}"
+        echo -ne "${white}//${yellow}//${green}//${mag}//    ${green}Pressione uma tecla para retornar ao menu inicial...$f"; read -n1 -r -p "";
+        RDYSSLH
+    fi
+    
+}
+
+# Função para verificar se a porta está disponível
+check_port() {
+    port=$1
+    result=$(ss -tln | grep -w ":$port")
+    if [ -z "$result" ]; then
+        echo "A porta $port está disponível."
+        available=true
+    else
+        echo "A porta $port não está disponível."
+        read -p "Deseja trocar de porta? (s/n): " choice
+        case "$choice" in
+            s|S)
+                available=false
+            ;;
+            n|N)
+                available=true
+            ;;
+            *)
+                echo "Opção inválida. Por favor, escolha novamente."
+                check_port $port
+            ;;
+        esac
+    fi
+}
+
+RDYSSLH() {
+    clear
+    echo -e "$DIVIS"
+    echo -e "${blue}--${yellow}>>${f}${white} menu${blue}/${yellow}MENU DE INSTALAÇÃO${blue}/${mag}SSLH${f}                      ${yellow}[${blue}v${yellow}] ${yellow}=${f}${white} Voltar${f}"
+    echo -e "$DIVIS"
+    
+    echo -e "${green} ##### ${white}IP:${cyano}  $ip ${f}"
+    echo -e "${green} ##### ${white}Sistema:${cyano}  $system_info ${f}"
+    echo -e "${green} ##### ${white}USUÁRIO:${cyano}  $USERPROFILENAME ${f}"
+    echo -e "$DIVIS"
+    
+    echo -e "${white}//${yellow}//${green}//${mag}//    ${yellow}INSTALADOR SSLH${f}"
+    echo -e "$DIVIS"
+    
+    if [[ "$SSLHSTATUS" = 'YES' ]]; then
+        service="sslh"
+        if ps -ef | grep -v grep | grep -q "$service"; then
+            echo -ne "${green} ${yellow}[${blue}p${yellow}] ${yellow}=${f}${white} $STOPSERVICE ${f}"; echo -e "$SSLHINFO"
+        else
+            echo -ne "${green} ${yellow}[${blue}s${yellow}] ${yellow}=${f}${white} $STARTSERVICE ${f}"; echo -e "$SSLHINFO"
+        fi
+        echo -e "$DIVIS"
+        
+        echo -e "${green} ${yellow}[${blue}01${yellow}] ${yellow}=${f}${white} GERENCIAR PORTAS ${f}"
+        echo -e "${green} ${yellow}[${blue}02${yellow}] ${yellow}=${f}${white} DESINSTALAR SSLH ${f}"
+        echo -e "${green} ${yellow}[${blue}00${yellow}] ${yellow}=${f}${white} $EXIT ${f}"
+        echo -e "$DIVIS"
+        
+        echo -ne "${yellow}  Opção:${f}"; read -p "" option
+        
+        case $option in
+            v )  $mainmenu ;;
+            p | P )
+                execute_and_update "service sslh stop"
+            RDYSSLH ;;
+            s | S )
+                execute_and_update "service sslh restart && /etc/init.d/sslh restart"
+            RDYSSLH ;;
+            1 | 01) show_menu;;
+            2 | 02)
+                echo -e "${white}//${yellow}//${green}//${mag}//    ${green} DESINSTALAR SSLH?${f}"
+                read -p "[s/n]: " -e -i n REMOVE
+                if [[ "$REMOVE" = 's' ]]; then
+                    echo -e "${white}//${yellow}//${green}//${mag}//    ${blue}DESINSTALANDO, ${green}AGUARDE...${f}"
+                    execute_and_update "service sslh stop"
+                    if [[ "$OS" = 'debian' ]]; then
+                        execute_and_update "apt-get remove --purge sslh -y"
+                    else
+                        execute_and_update "yum remove sslh -y"
+                    fi
+                    echo -e "${white}//${yellow}//${green}//${mag}//    ${blue}DESINSTALAÇÃO ${green}CONCLUÍDA!${f}"
+                    echo -ne "${white}//${yellow}//${green}//${mag}//    ${green}Pressione uma tecla para retornar ao menu inicial...${f}"; read -n1 -r -p ""
+                    $mainmenu
+                else
+                    echo ""
+                    echo -e "${white}//${yellow}//${green}//${mag}//    ${blue}OPERAÇÃO CANCELADA!\n${f}"
+                    echo -ne "${white}//${yellow}//${green}//${mag}//    ${green}Pressione uma tecla para retornar ao menu inicial...${f}"; read -n1 -r -p ""
+                    $mainmenu
+                fi
+            ;;
+            00) exit ;;
+            *) echo -e "${red} Opção inválida!${f}" ; echo "" ; sleep 2 ; $mainmenu;;
+        esac
+        elif [[ "$SSLHSTATUS" = 'NO' ]]; then
+        echo -e "$SSLHINFO"
+        echo -e "$DIVIS"
+        
+        echo -ne "${white}//${yellow}//${green}//${mag}//    ${yellow}CONTINUAR COM A CONFIGURAÇÃO DO SSLH?${f}"
+        read -p " [s/n]: " -e -i s yesNo
+        echo -e "$DIVIS"
+        
+        if [[ "$yesNo" = 's' ]]; then
+            echo -ne "${white}(${mag}<${green}i${mag}>${white})    ${green}VERIFIQUE SE O IP ESTÁ CORRETO ${f}"
+            read -p ": " -e -i $ip IPQ
+            echo -ne "${white}(${mag}<${green}i${mag}>${white})    ${blue}Defina uma porta de tráfego para o SSLH, a porta 443 já vem\ndefinida por padrão. Deixe em branco caso não deseje alterá-la.\n${f}"
+            # read -p ": " PORTSSLH
+            # Loop para obter uma porta válida
+            while true; do
+                read -p "Digite a porta que deseja verificar: " port
+                if [[ $port =~ ^[0-9]+$ ]]; then
+                    check_port $port
+                    if [ "$available" = true ]; then
+                        break
+                    fi
+                else
+                    echo "Por favor, digite um número de porta válido."
+                fi
+            done
+            _PORTSSLH=$port
+            echo -e "$DIVIS"
+            
+            echo ""
+            echo -ne "${white}//${yellow}//${green}//${mag}//    ${mag}Pressione uma tecla para iniciar...${f}"; read -n1 -r -p ""
+            echo -e "${white}//${yellow}//${green}//${mag}//    ${blue}INICIANDO INSTALAÇÃO ${green}AGUARDE...${f}"
+            
+            if [[ "$OS" = 'debian' ]]; then
+                execute_and_update "apt-get install -y -q sslh"
+                execute_and_update "apt-get update -y"
+             #   execute_and_update "apt-get install sslh -y"
+            else
+                execute_and_update "yum install -y -q sslh"
+                execute_and_update "yum update -y"
+                execute_and_update "yum install sslh -y"
+            fi
+            
+            rm /etc/default/sslh >> /dev/null 2>&1
+            echo "RUN=yes" > /etc/default/sslh
+            echo "DAEMON=/usr/sbin/sslh" >> /etc/default/sslh
+            
+            if [[ "$_PORTSSLH" = '' ]]; then
+                echo -e "${white}//${yellow}//${green}//${mag}//    ${blue}NOVA PORTA ${red}NÃO ${blue}DEFINIDA.${f}"
+                elif [[ "$_PORTSSLH" = '443' ]]; then
+                echo 'DAEMON_OPTS="--user sslh --listen 0.0.0.0:443 --ssh 127.0.0.1:22 --http 127.0.0.1:80 --ssl 127.0.0.1:4433 --openvpn 127.0.0.1:1194 --pidfile /var/run/sslh/sslh.pid --timeout 5"' >> /etc/default/sslh
+                echo -e "${white}//${yellow}//${green}//${mag}//    ${blue}PORTA ${white}443 ${blue}JÁ DEFINIDA.${f}"
+                elif [[ "$_PORTSSLH" = '22' ]]; then
+                echo -e "${white}//${yellow}//${green}//${mag}//    ${blue}PORTA ${white}22 ${blue}JÁ DEFINIDA PARA SSH.${f}"
+                echo 'DAEMON_OPTS="--user sslh --listen 0.0.0.0:443 --ssh 127.0.0.1:22 --http 127.0.0.1:80 --ssl 127.0.0.1:4433 --openvpn 127.0.0.1:1194 --pidfile /var/run/sslh/sslh.pid --timeout 5"' >> /etc/default/sslh
+            else
+                echo -e "${white}//${yellow}//${green}//${mag}//    ${blue}PORTA ${white}$PORTDROP ${blue}DEFINIDA.${f}"
+                echo 'DAEMON_OPTS='"--user sslh --listen 0.0.0.0:$_PORTSSLH --ssh 127.0.0.1:22 --http 127.0.0.1:80 --ssl 127.0.0.1:4433 --openvpn 127.0.0.1:1194 --pidfile /var/run/sslh/sslh.pid --timeout 5"'' >> /etc/default/sslh
+            fi
+            
+            if [ -e "/etc/default/sslh" ]; then
+                execute_and_update "service sslh restart && /etc/init.d/sslh restart"
+            else
+                echo -e "${red}OPS! HÁ ALGO DE ERRADO!\n${mag}Favor entrar em contato com seu fornecedor! ${mag}(SSLH CONFIG RUNNING)${f}"
+                echo -ne "${white}//${yellow}//${green}//${mag}//    ${green}Pressione uma tecla para retornar ao menu inicial...${f}"; read -n1 -r -p ""
+                $mainmenu
+            fi
+            
+            echo -e "${white}//${yellow}//${green}//${mag}//    ${blue}CONFIGURAÇÃO CONCLUÍDA COM ${green}SUCESSO!${f}"
+            echo -e "${white}//${yellow}//${green}//${mag}//    ${green} √ ${white} PORTAS SSLH:${red}  $_PORTSSLH ${f}"
+            echo -e "${white}//${yellow}//${green}//${mag}//    ${green} √ ${white} IP/HOST: ${red} $IPQ${f}"
+            echo -e "${white}//${yellow}//${green}//${mag}//    ${green} √ MANIPULE AS PORTAS EM ${yellow}GERENCIAR PORTAS${f}"
+            echo ""
+            echo -e "$DIVIS"
+            
+            echo -ne "${white}//${yellow}//${green}//${mag}//    ${green}Pressione uma tecla para retornar ao menu inicial...${f}"; read -n1 -r -p ""
+            $mainmenu
+            elif [[ "$yesNo" = 'n' ]]; then
+            echo -e "$DIVIS"
+            echo -e "${white}//${yellow}//${green}//${mag}//    ${blue}OPERAÇÃO CANCELADA!\n${green}Pressione uma tecla para retornar ao menu inicial...${f}"; read -n1 -r -p ""
+            echo -e "$DIVIS"
+            $mainmenu
+            elif [[ "$yesNo" = 'v' ]]; then
+            $mainmenu
+        else
+            echo -e "${white}//${yellow}//${green}//${mag}//    ${blue}OPÇÃO INVÁLIDA!${f}"
+            echo -ne "${white}//${yellow}//${green}//${mag}//    ${green}Pressione uma tecla para retornar ao menu inicial...${f}"; read -n1 -r -p ""
+            $mainmenu
+        fi
+    else
+        echo -e "${white}//${yellow}//${green}//${mag}//    ${red}OPS! HÁ ALGO DE ERRADO!\n${mag}Favor entrar em contato com seu fornecedor! ${mag}(SSLH)${f}"
+        echo -ne "${white}//${yellow}//${green}//${mag}//    ${green}Pressione uma tecla para retornar ao menu inicial...${f}"; read -n1 -r -p ""
+        $mainmenu
+    fi
+}
+
+# Função para executar um comando e atualizar a mesma linha com os logs
+execute_and_update() {
+    command="$@"
+    $command > /tmp/output.log 2>&1 &   # Redireciona a saída e executa em segundo plano
+    pid=$!                               # Pega o PID do processo em segundo plano
+    
+    while kill -0 $pid > /dev/null 2>&1; do
+        echo -ne "Executando: $command - Logs: $(tail -n 1 /tmp/output.log)\033[0K\r"
+        sleep 0.5
+    done
+    
+    echo -ne "Executando: $command - Logs: $(tail -n 1 /tmp/output.log)\033[0K\r"
+    echo ""
+}
+
+RDYSSLH

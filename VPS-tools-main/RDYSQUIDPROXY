@@ -1,0 +1,248 @@
+#!/bin/bash
+
+# Função para verificar se a porta está disponível
+check_port() {
+    port=$1
+    result=$(ss -tln | grep -w ":$port")
+    if [ -z "$result" ]; then
+        echo "A porta $port está disponível."
+        available=true
+    else
+        echo "A porta $port não está disponível."
+        read -p "Deseja trocar de porta? (s/n): " choice
+        case "$choice" in
+            s|S)
+                available=false
+            ;;
+            n|N)
+                available=true
+            ;;
+            *)
+                echo "Opção inválida. Por favor, escolha novamente."
+                check_port $port
+            ;;
+        esac
+    fi
+}
+
+RDYSQUIDPROXY(){
+    clear
+    echo -e "$DIVIS"
+    
+    echo -e "${blue}--$yellow>>$f$white menu${blue}/${yellow}MENU DE INSTALAÇÃO${blue}/${mag}SQUID PROXY$f               $yellow [${blue}v$yellow] $yellow=$f$white Voltar$f";
+    echo -e "$DIVIS"
+    
+    echo -e "$green ##### $white IP:$cyano  $ip $f";
+    echo -e "$green ##### $white Sistema:$cyano  $(cat /etc/so) $f";
+    echo -e "$green ##### $white USUÁRIO:$cyano  $USERPROFILENAME $f";
+    echo -e "$DIVIS"
+    
+    echo -e "${white}//${yellow}//${green}//${mag}//    ${yellow}INSTALADOR SQUID PROXY$f"
+    echo -e "$DIVIS"
+    
+    if [[ "$SQUIDSTATUS" = 'YES' ]]; then
+        service="squid*"
+        if ps -ef | grep -v grep | grep $service &>/dev/null; then
+            echo -ne "$green $yellow [${blue}p$yellow] $yellow=$f$white $STOPSERVICE $f"; echo -e "$SQUIDINFO"
+        else
+            echo -ne "$green $yellow [${blue}s$yellow] $yellow=$f$white $STARTSERVICE $f"; echo -e "$SQUIDINFO"
+        fi
+        echo -e "$DIVIS"
+        echo -e "$green $yellow [${blue}01$yellow] $yellow=$f$white GERENCIAR PORTAS $f"
+        echo -e "$green $yellow [${blue}02$yellow] $yellow=$f$white DESINSTALAR SQUID PROXY $f"
+        echo -e "$green $yellow [${blue}00$yellow] $yellow=$f$white $EXIT $f"
+        echo -e "$DIVIS"
+        
+        echo -ne "$yellow  Opção:$f"; read -p ""  option
+        
+        case $option in
+            v)  $mainmenu ;;
+            p|P)
+                service squid* stop &>/dev/null
+                RDYSPINNER
+                echo -e "${white}//${yellow}//${green}//${mag}//    ${red}(STOP) ${blue}OPERAÇÃO ${green}CONCLUÍDA!$f"
+                echo -ne "${white}//${yellow}//${green}//${mag}//    ${green}Pressione uma tecla para retornar...$f"; read -n1 -r -p ""
+                RDYSQUIDPROXY
+            ;;
+            s|S)
+                service squid restart &>/dev/null
+                RDYSPINNER
+                echo -e "${white}//${yellow}//${green}//${mag}//    ${red}(START) ${blue}OPERAÇÃO ${green}CONCLUÍDA!$f"
+                echo -ne "${white}//${yellow}//${green}//${mag}//    ${green}Pressione uma tecla para retornar...$f"; read -n1 -r -p ""
+                RDYSQUIDPROXY
+            ;;
+            1|01) RDYMANAGEPORT ;;
+            2|02)
+                echo -e "${white}//${yellow}//${green}//${mag}//    ${green} DESINSTALAR SQUID PROXY?$f";
+                read -p "[s/n]: " -e -i n REMOVE
+                if [[ "$REMOVE" = 's' ]]; then
+                    echo -e "${white}//${yellow}//${green}//${mag}//    ${blue}DESINSTALANDO, ${green}AGUARDE...$f"
+                    service squid stop &>/dev/null
+                    RDYSPINNER
+                    if [[ "$OS" = 'debian' ]]; then
+                        apt-get remove --purge squid squid3 -y &>/dev/null
+                    else
+                        yum remove squid squid3 -y &>/dev/null
+                    fi
+                    echo -e "${white}//${yellow}//${green}//${mag}//    ${blue}DESINSTALAÇÃO ${green}CONCLUÍDA!$f"
+                    echo -ne "${white}//${yellow}//${green}//${mag}//    ${green}Pressione uma tecla para retornar ao menu inicial...$f"; read -n1 -r -p ""
+                    $mainmenu
+                else
+                    echo ""
+                    echo -e "${white}//${yellow}//${green}//${mag}//    ${blue}OPERAÇÃO CANCELADA!\n$f"
+                    echo -ne "${white}//${yellow}//${green}//${mag}//    ${green}Pressione uma tecla para retornar ao menu inicial...$f"; read -n1 -r -p ""
+                    $mainmenu
+                fi
+            ;;
+            00) exit ;;
+            *)
+            echo -e "$red Opção inválida!$f" ; echo "" ; sleep 2 ; $mainmenu ;;
+        esac
+        elif [[ "$SQUIDSTATUS" = 'NO' ]]; then
+        echo -e "$SQUIDINFO"
+        echo -e "$DIVIS"
+        
+        echo -e "${white}//${yellow}//${green}//${mag}//    ${yellow}CONTINUAR COM A CONFIGURAÇÃO DO SQUID PROXY?$f";
+        read -p " [s/n]: " -e -i s yesNo
+        echo -e "$DIVIS"
+        
+        if [[ "$yesNo" = 's' ]]; then
+            echo -ne "${white}(${mag}<${green}i${mag}>${white})    ${green}VERIFIQUE SE O IP ESTÁ CORRETO $f"; read -p ": " -e -i $ip IPQ
+            echo -ne "${white}(${mag}<${green}i${mag}>${white})    ${blue}Defina uma porta HTTP para o SQUID, a porta 3128 já vem definida por padrão.\nDeixe em branco caso não deseje mais alguma porta agora.$f";
+            
+            # Loop para obter uma porta válida
+            while true; do
+                read -p "Digite a porta que deseja verificar: " port
+                if [[ $port =~ ^[0-9]+$ ]]; then
+                    check_port $port
+                    if [ "$available" = true ]; then
+                        break
+                    fi
+                else
+                    echo "Por favor, digite um número de porta válido."
+                fi
+            done
+            PORTSQUID=$port
+            
+            echo -ne "${white}(${mag}<${green}i${mag}>${white})    ${green}ATIVAR COMPRESSÃO SSH?$f"; read -p " [s/n]: " -e -i s COMPRESS
+            echo -e "$DIVIS"
+            
+            echo ""
+            echo -e "${white}//${yellow}//${green}//${mag}//    ${mag}Pressione uma tecla para iniciar...$f"; read -n1 -r -p ""
+            
+            if [[ "$PORTSQUID" = '' ]]; then
+                echo -e "${white}//${yellow}//${green}//${mag}//    ${blue}NOVA PORTA ${red}NÃO ${blue}DEFINIDA.$f";
+                squidconf1(){
+                    echo "http_port 3128
+visible_hostname RDYSOFTWARE
+acl ip dstdomain $IPQ
+acl GET method GET
+# NÃO REMOVA ESTE COMENTÁRIO ABAIXO!
+#rdyacl
+                    http_access allow ip" > /etc/squid*/squid.conf
+                }
+                elif [[ "$PORTSQUID" = '3128' ]]; then
+                echo -e "${white}//${yellow}//${green}//${mag}//    ${blue}PORTA ${white}3128 ${blue}JÁ DEFINIDA.$f";
+            else
+                echo -e "${white}//${yellow}//${green}//${mag}//    ${blue}PORTA ${white}$PORTSQUID ${blue}DEFINIDA.$f";
+                squidconf1(){
+                    echo "http_port $PORTSQUID
+http_port 3128
+visible_hostname RDYSOFTWARE
+acl ip dstdomain $IPQ
+acl GET method GET
+# NÃO REMOVA ESTE COMENTÁRIO ABAIXO!
+#rdyacl
+                    http_access allow ip" > /etc/squid*/squid.conf
+                }
+            fi
+            
+            squidconf2(){
+                echo 'acl accept dstdomain -i "/etc/rdy/payloads"
+http_access allow accept
+acl local dstdomain localhost
+# NÃO REMOVA ESTE COMENTÁRIO ABAIXO!
+#rdyallow
+http_access allow local
+acl iplocal dstdomain 127.0.0.1
+http_access allow iplocal
+                http_access deny all' >> /etc/squid*/squid.conf
+            }
+            
+            if [[ "$COMPRESS" = 's' ]]; then
+                echo -e "${white}//${yellow}//${green}//${mag}//    ${blue}COMPRESSÃO SSH ${green}ATIVADA.$f";
+                grep -v "^Compression yes" /etc/ssh/sshd_config > /tmp/sshcp && mv /tmp/sshcp /etc/ssh/sshd_config
+                echo "Compression yes" >> /etc/ssh/sshd_config
+                elif [[ "$COMPRESS" = 'n' ]]; then
+                echo -e "${white}//${yellow}//${green}//${mag}//    ${blue}COMPRESSÃO SSH ${red}DESATIVADA.$f";
+                grep -v "^Compression yes" /etc/ssh/sshd_config > /tmp/sshcp && mv /tmp/sshcp /etc/ssh/sshd_config
+            fi
+            echo -e "${white}//${yellow}//${green}//${mag}//    ${blue}INICIANDO INSTALAÇÃO ${green}AGUARDE...$f";
+            
+            function payloads(){
+                echo "www.speedtest.net
+.speedtest.
+                telegram.me/rdysoftware" > /etc/rdy/payloads
+            }
+            payloads
+            
+            if [[ "$OS" = 'debian' ]]; then
+                apt-get install -f -y &>/dev/null
+                dpkg --configure -a -y &>/dev/null
+                apt-get update -y &>/dev/null
+                apt-get install -y squid3 figlet -y &>/dev/null
+                service ssh restart &>/dev/null
+            else
+                yum install -f -y &>/dev/null
+                dpkg --configure -a -y &>/dev/null
+                yum -y update &>/dev/null
+                yum install -y squid &>/dev/null
+                service httpd stop &>/dev/null
+                service sshd restart &>/dev/null
+            fi
+            
+            squidconf1
+            squidconf2
+            
+            if [ -e "/etc/squid/squid.conf" ]; then
+                service squid restart &>/dev/null
+            else
+                if [ -e "/etc/squid3/squid.conf" ]; then
+                    service squid3 restart &>/dev/null
+                else
+                    echo -e "${red}OPS! HÁ ALGO DE ERRADO!\n${mag}Favor entrar em contato com seu fornecedor! ${mag}(SQUID CONFIG RUNNING)$f";
+                    echo -ne "${white}//${yellow}//${green}//${mag}//    ${green}Pressione uma tecla para retornar ao menu inicial...$f"; read -n1 -r -p "";
+                    $mainmenu
+                fi
+            fi
+            echo -e "${white}//${yellow}//${green}//${mag}//    ${blue}CONFIGURAÇÃO CONCLUÍDA COM ${green}SUCESSO!$f";
+            echo "";
+            echo -e "${white}//${yellow}//${green}//${mag}//    ${green} √ ${white} PORTA PROXY:${red}  $PORTSQUID 3128 $f"
+            echo -e "${white}//${yellow}//${green}//${mag}//    ${green} √ ${white} PORTA SSH: ${red} 22 $f"
+            echo -e "${white}//${yellow}//${green}//${mag}//    ${green} √ ${white} IP/HOST: ${red} $IPQ, localhost, 127.0.0.1 $f"
+            echo -e "${white}//${yellow}//${green}//${mag}//    ${green} √ ${white} ARQUIVOS DE HOSTS: ${red}/etc/rdy/payloads $f"
+            echo ""
+            echo -e "$DIVIS"
+            echo -ne "${white}//${yellow}//${green}//${mag}//    ${green}Pressione uma tecla para retornar ao menu inicial...$f"; read -n1 -r -p "";
+            $mainmenu
+            elif [[ "$yesNo" = 'n' ]]; then
+            echo -e "$DIVIS"
+            echo -e "${white}//${yellow}//${green}//${mag}//    ${blue}OPERAÇÃO CANCELADA!\n${green}Pressione uma tecla para retornar ao menu inicial...$f"; read -n1 -r -p ""
+            echo -e "$DIVIS"
+            $mainmenu
+            elif [[ "$yesNo" = 'v' ]]; then
+            $mainmenu
+        else
+            echo -e "${white}//${yellow}//${green}//${mag}//    ${blue}OPÇÃO INVÁLIDA!$f";
+            echo -ne "${white}//${yellow}//${green}//${mag}//    ${green}Pressione uma tecla para retornar ao menu inicial...$f"; read -n1 -r -p "";
+            $mainmenu
+        fi
+    else
+        echo -e "${white}//${yellow}//${green}//${mag}//    ${red}OPS! HÁ ALGO DE ERRADO!\n${mag}Favor entrar em contato com seu fornecedor! ${mag}(SQUID)$f";
+        echo -ne "${white}//${yellow}//${green}//${mag}//    ${green}Pressione uma tecla para retornar ao menu inicial...$f"; read -n1 -r -p "";
+        $mainmenu
+    fi
+}
+
+
+RDYSQUIDPROXY

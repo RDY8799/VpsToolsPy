@@ -1,0 +1,160 @@
+#!/bin/bash
+
+# Função para verificar se a porta está disponível
+check_port() {
+    local port=$1
+    if ss -tln | grep -wq ":$port"; then
+        echo "A porta $port não está disponível."
+        read -p "Deseja trocar de porta? (s/n): " choice
+        case "$choice" in
+            s|S) available=false ;;
+            n|N) available=true ;;
+            *) echo "Opção inválida. Por favor, escolha novamente."
+               check_port $port ;;
+        esac
+    else
+        echo "A porta $port está disponível."
+        available=true
+    fi
+}
+
+RDYDROPBEAR() {
+    clear
+    echo -e "$DIVIS"
+    echo -e "${blue}--$yellow>>$f$white menu${blue}/${yellow}MENU DE INSTALAÇÃO${blue}/${mag}DROPBEAR$f                    $yellow [${blue}v$yellow] $yellow=$f$white Voltar$f"
+    echo -e "$DIVIS"
+
+    echo -e "$green ##### $white IP:$cyano  $ip $f"
+    echo -e "$green ##### $white Sistema:$cyano  $(cat /etc/os-release | grep PRETTY_NAME | cut -d '"' -f2) $f"
+    echo -e "$green ##### $white USUÁRIO:$cyano  $USERPROFILENAME $f"
+    echo -e "$DIVIS"
+
+    echo -e "${white}//${yellow}//${green}//${mag}//    ${yellow}INSTALADOR DROPBEAR$f"
+    echo -e "$DIVIS"
+
+    # Verifica o status do Dropbear
+    if [[ "$DROPSTATUS" == 'YES' ]]; then
+        service="dropbear"
+        if pgrep -x "$service" > /dev/null; then
+            echo -ne "$green $yellow [${blue}p$yellow] $yellow=$f$white $STOPSERVICE $f"; echo -e "$DROPINFO"
+        else
+            echo -ne "$green $yellow [${blue}s$yellow] $yellow=$f$white $STARTSERVICE $f"; echo -e "$DROPINFO"
+        fi
+        echo -e "$DIVIS"
+
+        # Exibe opções do menu
+        echo -e "$green $yellow [${blue}01$yellow] $yellow=$f$white GERENCIAR PORTAS $f"
+        echo -e "$green $yellow [${blue}02$yellow] $yellow=$f$white DESINSTALAR DROPBEAR $f"
+        echo -e "$green $yellow [${blue}00$yellow] $yellow=$f$white $EXIT $f"
+        echo -e "$DIVIS"
+
+        # Lê a opção do usuário
+        read -p "$yellow  Opção:$f " option
+
+        # Executa a ação correspondente à opção escolhida
+        case $option in
+            v) $mainmenu ;;
+            p|P)
+                service dropbear stop &>/dev/null
+                RDYSPINNER
+                echo -e "${white}//${yellow}//${green}//${mag}//    ${red}(STOP) ${blue}OPERAÇÃO ${green}CONCLUÍDA!$f"
+                read -n1 -r -p "${white}//${yellow}//${green}//${mag}//    ${green}Pressione uma tecla para retornar...$f"
+                RDYDROPBEAR ;;
+            s|S)
+                service dropbear restart &>/dev/null
+                RDYSPINNER
+                echo -e "${white}//${yellow}//${green}//${mag}//    ${red}(START) ${blue}OPERAÇÃO ${green}CONCLUÍDA!$f"
+                read -n1 -r -p "${white}//${yellow}//${green}//${mag}//    ${green}Pressione uma tecla para retornar...$f"
+                RDYDROPBEAR ;;
+            1|01) RDYDROPBEAR ;;
+            2|02)
+                echo -e "${white}//${yellow}//${green}//${mag}//    ${green} DESINSTALAR DROPBEAR?$f"
+                read -p "[s/n]: " -e -i n REMOVE
+                if [[ "$REMOVE" == 's' ]]; then
+                    echo -e "${white}//${yellow}//${green}//${mag}//    ${blue}DESINSTALANDO, ${green}AGUARDE...$f"
+                    service dropbear stop &>/dev/null
+                    RDYSPINNER
+                    if [[ "$OS" == 'debian' ]]; then
+                        apt-get remove --purge dropbear -y &>/dev/null
+                    else
+                        yum remove dropbear -y &>/dev/null
+                    fi
+                    RDYSPINNER
+                    echo -e "${white}//${yellow}//${green}//${mag}//    ${blue}DESINSTALAÇÃO ${green}CONCLUÍDA!$f"
+                    read -n1 -r -p "${white}//${yellow}//${green}//${mag}//    ${green}Pressione uma tecla para retornar ao menu inicial...$f"
+                    $mainmenu
+                else
+                    echo -e "${white}//${yellow}//${green}//${mag}//    ${blue}OPERAÇÃO CANCELADA!\n$f"
+                    read -n1 -r -p "${white}//${yellow}//${green}//${mag}//    ${green}Pressione uma tecla para retornar ao menu inicial...$f"
+                    $mainmenu
+                fi
+                ;;
+            00) exit ;;
+            *) echo -e "$red Opção inválida!$f" ; sleep 2 ; $mainmenu ;;
+        esac
+    elif [[ "$DROPSTATUS" == 'NO' ]]; then
+        echo -e "$DROPINFO"
+        echo -e "$DIVIS"
+
+        echo -e "${white}//${yellow}//${green}//${mag}//    ${yellow}CONTINUAR COM A CONFIGURAÇÃO DO DROPBEAR?$f"
+        read -p " [s/n]: " -e -i s yesNo
+        echo -e "$DIVIS"
+
+        if [[ "$yesNo" == 's' ]]; then
+            read -p "${white}(${mag}<${green}i${mag}>${white})    ${green}VERIFIQUE SE O IP ESTÁ CORRETO $f: " -e -i $ip IPQ
+            read -p "${white}(${mag}<${green}i${mag}>${white})    ${blue}Defina uma porta HTTP para o DROPBEAR, a porta 443 já vem definida por padrão.\nDeixe em branco caso não deseje mais alguma porta agora.$f: " PORTDROP
+
+            # Loop para obter uma porta válida
+            while true; do
+                read -p "Digite a porta que deseja verificar: " port
+                if [[ $port =~ ^[0-9]+$ ]]; then
+                    check_port $port
+                    if [ "$available" == true ]; then
+                        break
+                    fi
+                else
+                    echo "Por favor, digite um número de porta válido."
+                fi
+            done
+            PORTDROP=$port
+
+            echo -e "$DIVIS"
+
+            read -n1 -r -p "${white}//${yellow}//${green}//${mag}//    ${mag}Pressione uma tecla para iniciar...$f"
+            echo -e "${white}//${yellow}//${green}//${mag}//    ${blue}INICIANDO INSTALAÇÃO ${green}AGUARDE...$f"
+
+            if [[ "$OS" == 'debian' ]]; then
+                apt-get install -f -y &>/dev/null
+                dpkg --configure -a &>/dev/null
+                apt-get update &>/dev/null
+                apt-get install dropbear -y &>/dev/null
+            else
+                yum install -f -y &>/dev/null
+                dpkg --configure -a &>/dev/null
+                yum update -y &>/dev/null
+                yum install dropbear -y &>/dev/null
+            fi
+
+            if [[ "$PORTDROP" != '' && "$PORTDROP" != '443' && "$PORTDROP" != '22' ]]; then
+                printf "#loading\nNO_START=0\nDROPBEAR_PORT=$PORTDROP\n" > /etc/default/dropbear
+                echo 'DROPBEAR_EXTRA_ARGS="-p 443"' >> /etc/default/dropbear
+                service dropbear restart &>/dev/null
+                echo "/bin/false" > /etc/shells &>/dev/null
+                service dropbear restart &>/dev/null
+                /etc/init.d/dropbear restart &>/dev/null
+            fi
+
+            echo -e "${white}//${yellow}//${green}//${mag}//    ${blue}CONFIGURAÇÃO CONCLUÍDA COM ${green}SUCESSO!$f"
+            echo ""
+            echo -e "${white}//${yellow}//${green}//${mag}//    ${green} √ ${white} PORTAS DROPBEAR:${red}  $PORTDROP 443 $f"
+            echo -e "${white}//${yellow}//${green}//${mag}//    ${green} √ ${white} IP/HOST: ${red} $IPQ$f"
+            echo ""
+            read -n1 -r -p "${white}//${yellow}//${green}//${mag}//    ${green}Pressione uma tecla para retornar ao menu inicial...$f"
+            $mainmenu
+        elif [[ "$yesNo" == 'n' ]]; then
+            echo -e "${white}//${yellow}//${green}//${mag}//    ${red}OPERAÇÃO CANCELADA!$f"
+            read -n1 -r -p "${white}//${yellow}//${green}//${mag}//    ${green}Pressione uma tecla para retornar ao menu inicial...$f"
+            $mainmenu
+        fi
+    fi
+}

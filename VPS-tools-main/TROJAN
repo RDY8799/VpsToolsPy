@@ -1,0 +1,186 @@
+#!/bin/bash
+
+clear
+
+# Verifica se o usuário é root ou tem privilégios de sudo
+if [ "$(id -u)" -ne 0 ]; then
+    if groups | grep -q "\bsudo\b"; then
+        echo "Você não é root, mas está no grupo sudo."
+        echo -e "Para tornar-se root execute \033[1;31msudo su\033[0m"
+    else
+        echo -e "Você não é root nem está no grupo sudo.\nPara tornar-se root, execute \033[1;31msu\033[0m e digite sua senha de root."
+    fi
+    exit
+fi
+
+# Função para verificar se a porta está disponível
+check_port() {
+    available=false  # Inicializa como false por padrão
+    port=$1
+    result=$(ss -tln | grep -w ":$port")
+    if [ -z "$result" ]; then
+        echo "A porta $port está disponível."
+        available=true
+    else
+        echo "A porta $port não está disponível."
+        read -p "Deseja trocar de porta? (s/n): " choice
+        case "$choice" in
+            s|S) available=false ;;
+            n|N) available=true ;;
+            *) echo "Opção inválida. Por favor, escolha novamente."
+               check_port $port ;;
+        esac
+    fi
+}
+
+# Obtém o IP da máquina
+ip=$(hostname -I | awk '{print $1}')
+if [[ -z "$ip" ]]; then
+    ip=$(wget -qO- ipv4.icanhazip.com)
+fi
+
+# Dados da RDY Software
+about="© RDY SOFTWARE | 2016 - 2024 All rights reserved"
+email="tomadassh@gmail.com"
+
+install_trojan() {
+    # Loop para obter um domínio válido
+    while true; do
+        read -p "Digite seu domínio (Ex: myserver.com): " domain
+        if [[ -z "$domain" ]]; then
+            echo "DOMÍNIO INVÁLIDO! Não pode ser vazio."
+        elif [[ ! "$domain" =~ ^[a-zA-Z0-9.-]+$ ]]; then
+            echo "Domínio inválido! Use apenas caracteres alfanuméricos, pontos e hífens."
+        else
+            break
+        fi
+    done
+
+    # Loop para obter uma porta válida para o Trojan
+    while true; do
+        read -p "Digite a porta que deseja usar para o Trojan (Ex: 443): " port
+        if [[ $port =~ ^[0-9]+$ ]]; then
+            check_port $port
+            if [ "$available" = true ]; then
+                break
+            fi
+        else
+            echo "Por favor, digite um número de porta válido."
+        fi
+    done
+    porttrojan=$port
+
+    # Loop para obter uma porta válida para o NGINX
+    while true; do
+        read -p "Digite a porta que deseja configurar para o NGINX HTTP (Ex: 8080): " nginx_http_port
+        if [[ $nginx_http_port =~ ^[0-9]+$ ]]; then
+            check_port $nginx_http_port
+            if [ "$available" = true ]; then
+                break
+            fi
+        else
+            echo "Por favor, digite um número de porta válida."
+        fi
+    done
+
+    while true; do
+        read -p "Digite a porta que deseja configurar para o NGINX HTTPS (Ex: 8443): " nginx_https_port
+        if [[ $nginx_https_port =~ ^[0-9]+$ ]]; then
+            check_port $nginx_https_port
+            if [ "$available" = true ]; then
+                break
+            fi
+        else
+            echo "Por favor, digite um número de porta válida."
+        fi
+    done
+
+    # Loop para obter uma senha válida
+    while true; do
+        read -p "Digite uma senha (Ex: rdy): " passtrojan
+        if [[ -z "$passtrojan" ]]; then
+            echo "SENHA INVÁLIDA! Não pode ser vazia."
+        else
+            break
+        fi
+    done
+
+    echo -e "\033[1;36m\033[1;32m•\033[0m Atualizando pacotes...\033[0m"
+    apt update -y >/dev/null 2>/dev/null
+
+    echo -e "\033[1;36m\033[1;32m✓\033[0m OK\033[0m"
+    echo ""
+
+    echo -e "\033[1;36m\033[1;32m•\033[0m Instalando e configurando NGINX...\033[0m"
+    apt install nginx-full -y >/dev/null 2>/dev/null
+
+    # Substitui o 'server_name' pelo domínio informado
+    sed -i "s/server_name _;/server_name $domain;/g" /etc/nginx/sites-available/default
+
+    # Atualiza as portas do NGINX para HTTP e HTTPS
+    sed -i "s/listen 80 default_server;/listen $nginx_http_port default_server;/g" /etc/nginx/sites-available/default
+    sed -i "s/listen \[::\]:80 default_server;/listen \[::\]:$nginx_http_port default_server;/g" /etc/nginx/sites-available/default
+
+    sed -i "s/# listen 443 ssl default_server;/listen $nginx_https_port ssl default_server;/g" /etc/nginx/sites-available/default
+    sed -i "s/# listen \[::\]:443 ssl default_server;/listen \[::\]:$nginx_https_port ssl default_server;/g" /etc/nginx/sites-available/default
+
+    cp /var/www/html/index.nginx-debian.html /var/www/html/index.html
+    systemctl restart nginx
+
+    echo -e "\033[1;36m\033[1;32m✓\033[0m OK\033[0m"
+    echo ""
+
+    echo -e "\033[1;36m\033[1;32m•\033[0m Instalando e configurando certificado...\033[0m"
+    apt install certbot python3-certbot-nginx -y >/dev/null 2>/dev/null
+    sudo systemctl stop nginx
+    sudo certbot certonly --standalone -d "$domain" --non-interactive --agree-tos -m "$email"
+    sudo systemctl start nginx
+
+    # Configura permissões corretas
+    chmod +rx /etc/letsencrypt/live
+    chmod +rx /etc/letsencrypt/archive
+    chmod -R +r /etc/letsencrypt/archive/$domain
+
+    echo -e "\033[1;36m\033[1;32m✓\033[0m OK\033[0m"
+    echo ""
+
+    echo -e "\033[1;36m\033[1;32m•\033[0m Instalando Trojan...\033[0m"
+    apt install trojan -y >/dev/null 2>/dev/null
+
+    # Substitui configurações no arquivo config.json do Trojan
+    sed -i "s%password1%${passtrojan}%g" /etc/trojan/config.json
+    sed -i "s%password2%${passtrojan}2%g" /etc/trojan/config.json
+    sed -i "s%path/to/certificate.crt%/etc/letsencrypt/live/$domain/fullchain.pem%g" /etc/trojan/config.json
+    sed -i "s%path/to/private.key%/etc/letsencrypt/live/$domain/privkey.pem%g" /etc/trojan/config.json
+    sed -i 's/"local_port": .*,/"local_port": '"$porttrojan"',/g' /etc/trojan/config.json
+
+    systemctl enable trojan
+    systemctl start trojan
+
+    echo -e "\033[1;36m\033[1;32m✓✓✓✓✓✓✓✓✓✓ FINALIZADO! ✓✓✓✓✓✓✓✓✓✓✓\033[0m"
+    echo -e "${white}//${yellow}//${green}//${mag}//    ${blue}CONFIGURAÇÃO CONCLUÍDA COM ${green}SUCESSO!$f"
+    echo -e "${white}//${yellow}//${green}//${mag}//    ${green} √ ${white} PORTA Trojan:${red}  $porttrojan $f"
+    echo -e "${white}//${yellow}//${green}//${mag}//    ${green} √ ${white} IP/HOST: ${red}$ip / $domain$f"
+    echo ""
+    echo -e $DIVIS
+    echo -ne "${white}//${yellow}//${green}//${mag}//    ${green}Pressione uma tecla para retornar ao menu inicial...$f"; read -n1 -r -p ""
+    menu
+}
+
+# Menu principal
+while true; do
+    echo ""
+    echo -e "\033[46;1;37m$about\033[0m"
+    echo ""
+    echo -e "\033[42;1;37mINSTALADOR TROJAN\033[0m"
+    echo ""
+    read -p "Continuar com a instalação do Trojan? [s/n]: " option
+    case $option in
+        [SsYy]* ) install_trojan; break ;;
+        [Nn]* ) echo "Instalação abortada!"; 
+         echo -ne "${white}//${yellow}//${green}//${mag}//    ${green}Pressione uma tecla para retornar ao menu inicial...$f"; read -n1 -r -p "";
+    menu
+         ;;
+        * ) echo "Opção inválida, por favor digite 's' ou 'n'." ;;
+    esac
+done

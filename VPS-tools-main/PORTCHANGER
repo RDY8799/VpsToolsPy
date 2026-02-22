@@ -1,0 +1,141 @@
+#!/bin/bash
+
+# Definindo as variáveis de cores
+white="\033[0m"
+yellow="\033[1;33m"
+green="\033[1;32m"
+mag="\033[1;35m"
+blue="\033[1;34m"
+red="\033[1;31m"
+cyano="\033[1;36m"
+DIVIS="${white}//${yellow}//${green}//${mag}//"
+
+# Função para verificar se a porta está disponível
+check_port() {
+    port=$1
+    # Usando lsof para verificar se a porta está em uso
+    result=$(sudo lsof -i :$port)
+
+    if [ -z "$result" ]; then
+        echo -e "${green}A porta $port está disponível.$white"
+        available=true
+    else
+        echo -e "${red}A porta $port não está disponível. Está sendo usada pelo seguinte processo:$white"
+        echo "$result"  # Exibe o processo que está usando a porta
+        read -p "Deseja trocar de porta? (s/n): " choice
+        case "$choice" in
+            s|S|Y|y) available=false ;;
+            n|N) available=true ;;
+            *)
+                echo -e "${yellow}Opção inválida. Por favor, escolha novamente.$white"
+                check_port $port
+            ;;
+        esac
+    fi
+}
+
+
+
+# Função para alterar a porta de um serviço
+change_port() {
+    local service=$1
+    local config_file=$2
+    local search=$3
+    local port_label=$4
+
+    echo -e "$DIVIS"
+    echo -e "${white}Alterando porta para ${service}$white"
+    echo -e "$DIVIS"
+
+    while true; do
+        read -p "Digite a nova porta para $service: " new_port
+        new_port=$(echo "$new_port" | tr -d '[:space:]') # Remove espaços
+
+        if [[ $new_port =~ ^[0-9]+$ ]]; then
+            check_port $new_port
+            if [ "$available" = true ]; then
+                # Verificar se a linha termina com vírgula
+                config_line=$(grep -oP "$search.*" $config_file)
+                if [[ $config_line =~ ,$ ]]; then
+                    # Se terminar com vírgula, apenas substitui
+                    sed -i "s|$search[^ ]*|$port_label$new_port,|g" $config_file
+                else
+                    # Caso contrário, adiciona a vírgula
+                    sed -i "s|$search[^ ]*|$port_label$new_port|g" $config_file
+                fi
+                lowercase=$(echo "$service" | tr '[:upper:]' '[:lower:]')
+                service $lowercase restart 1>/dev/null 2>/dev/null
+                echo -e "${green}Porta alterada para $new_port com sucesso!$white"
+                break
+            fi
+        else
+            echo -e "${red}Por favor, digite um número de porta válido.$white"
+        fi
+    done
+    echo -ne "${white}//${yellow}//${green}//${mag}//    ${green}Pressione uma tecla para retornar ao menu inicial...$f"; read -n1 -r -p "";
+    menu
+}
+
+
+# Menu de serviços
+home_menu() {
+    clear
+    echo -e "$DIVIS"
+    echo -e "${blue}--${yellow}>>${white} Menu${blue}/${yellow}PORTA CHANGER MENU${blue}/${mag}SERVIÇOS${white}"
+    echo -e "$DIVIS"
+    echo -e "${green}01${yellow} - ${white}STUNNEL4"
+    echo -e "${green}02${yellow} - ${white}DROPBEAR"
+    echo -e "${green}03${yellow} - ${white}MTPROTO"
+    echo -e "${green}04${yellow} - ${white}TROJAN"
+    echo -e "${green}05${yellow} - ${white}SSH"
+    echo -e "${green}06${yellow} - ${white}OPENVPN"
+    echo -e "${green}07${yellow} - ${white}SQUID PROXY"
+    echo -e "${green}08${yellow} - ${white}BADVPN"
+    echo -e "${green}09${yellow} - ${white}SSLH"
+    echo -e "${green}10${yellow} - ${white}CHECAR PORTA"
+    echo -e "${green}00${yellow} - ${white}SAIR"
+    echo -e "$DIVIS"
+
+    read -p "Escolha o serviço para alterar a porta: " choice
+
+    case $choice in
+        v )  $mainmenu ;;
+        01 | 1) change_port "STUNNEL4" "/etc/stunnel/stunnel.conf" "^accept = " "accept = " ;;
+        02 | 2) change_port "DROPBEAR" "/etc/default/dropbear" "^DROPBEAR_PORT=" "DROPBEAR_PORT=" ;;
+        03 | 3) change_port "MTPROTO" "/etc/mtproto-proxy.conf" "^PORT=" "PORT=" ;;
+        04 | 4) change_port "TROJAN" "/etc/trojan/config.json" "\"local_port\": " "\"local_port\": " ;;
+        05 | 5) change_port "SSH" "/etc/ssh/sshd_config" "^Port " "Port " ;;
+        06 | 6) change_port "OPENVPN" "/etc/openvpn/server.conf" "^port " "port " ;;
+        07 | 7) change_port "SQUID3" "/etc/squid/squid.conf" "^http_port " "http_port " ;;
+        08 | 8) change_port "BADVPN" "/etc/badvpn/tun2socks.conf" "^port=" "port=" ;;
+        09 | 9) change_port "SSLH" "/etc/default/sslh" "^RUN=\"/usr/sbin/sslh" "RUN=\"/usr/sbin/sslh -p " ;;
+        10) 
+        echo -e "$DIVIS"
+    echo -e "${white}CHECAR PORTA$white"
+    echo -e "$DIVIS"
+
+    while true; do
+        read -p "Digite a porta: " new_port
+        new_port=$(echo "$new_port" | tr -d '[:space:]') # Remove espaços
+
+        if [[ $new_port =~ ^[0-9]+$ ]]; then
+            check_port $new_port
+        else
+            echo -e "${red}Por favor, digite um número de porta válido.$white"
+        fi
+    done
+        ;;
+        v | V | b | back ) menu;;
+         n | net | N | NET) netstat -nlpt
+            echo -ne "${white}//${yellow}//${green}//${mag}//    ${green}Pressione uma tecla para retornar ao menu inicial...$f"; read -n1 -r -p "";
+        home_menu;;
+        00 | 0) menu ;;
+        *)
+            echo -e "${red}Opção inválida!$white"
+            sleep 2
+            menu
+        ;;
+    esac
+}
+
+home_menu
