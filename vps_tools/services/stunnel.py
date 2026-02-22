@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 
 from vps_tools.core.services import Service
@@ -11,7 +12,7 @@ class StunnelService(Service):
         self.cert_path = "/etc/stunnel/stunnel.pem"
 
     def is_installed(self) -> bool:
-        return os.path.exists(self.config_path)
+        return shutil.which("stunnel4") is not None or shutil.which("stunnel") is not None
 
     def install(self, listen_port=4433, connect_port=22, ip="localhost"):
         try:
@@ -74,13 +75,18 @@ class StunnelService(Service):
 
     def uninstall(self):
         try:
-            subprocess.run(["systemctl", "stop", "stunnel4"], check=True)
+            subprocess.run(["systemctl", "stop", "stunnel4"], check=False)
+            subprocess.run(["service", "stunnel4", "stop"], check=False)
+            subprocess.run(["service", "stunnel", "stop"], check=False)
             if os.path.exists("/etc/debian_version"):
                 subprocess.run(
-                    ["apt-get", "remove", "--purge", "stunnel4", "-y"], check=True
+                    ["apt-get", "remove", "--purge", "stunnel", "stunnel4", "-y"], check=True
                 )
             else:
-                subprocess.run(["yum", "remove", "stunnel4", "-y"], check=True)
+                subprocess.run(["yum", "remove", "stunnel", "stunnel4", "-y"], check=True)
+            for path in [self.config_path, self.cert_path, "/etc/default/stunnel4"]:
+                if os.path.exists(path):
+                    os.remove(path)
             return True
         except Exception as e:
             return str(e)

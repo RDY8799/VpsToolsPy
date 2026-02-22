@@ -1,7 +1,9 @@
 import os
+import re
 import shutil
 import socket
 import subprocess
+import time
 
 import psutil
 import requests
@@ -151,6 +153,8 @@ class SystemActions:
             return False, "Comando global automatico nao suportado no Windows."
         if not os.path.isdir(repo_dir):
             return False, f"Diretorio do repositorio nao encontrado: {repo_dir}"
+        if not re.match(r'^[a-zA-Z0-9._-]+$', command_name):
+            return False, "Nome de comando invalido. Use apenas letras, numeros, ponto, _ ou -."
 
         current = shutil.which(command_name)
         target = f"/usr/local/bin/{command_name}"
@@ -172,5 +176,130 @@ class SystemActions:
                 f.write(launcher)
             os.chmod(target, 0o755)
             return True, f"Comando '{command_name}' criado em {target}"
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def create_swap(size_mb: int = 1024, swap_path: str = "/swapfile"):
+        if os.name == "nt":
+            return False, "Criacao de swap nao suportada no Windows."
+        if size_mb < 256:
+            return False, "Tamanho minimo recomendado: 256 MB."
+        if shutil.which("mkswap") is None or shutil.which("swapon") is None:
+            return False, "Ferramentas de swap nao encontradas (mkswap/swapon)."
+
+        try:
+            with open("/proc/swaps", "r") as f:
+                lines = [line for line in f.read().splitlines() if line.strip()]
+            if len(lines) > 1:
+                return False, "Ja existe swap ativo no sistema."
+        except Exception:
+            pass
+
+        if os.path.exists(swap_path):
+            return False, f"Arquivo de swap ja existe: {swap_path}"
+
+        fallocate_ok = False
+        if shutil.which("fallocate") is not None:
+            fallocate_ok = (
+                subprocess.run(
+                    ["fallocate", "-l", f"{size_mb}M", swap_path], check=False
+                ).returncode
+                == 0
+            )
+        if not fallocate_ok:
+            dd_cmd = [
+                "dd",
+                "if=/dev/zero",
+                f"of={swap_path}",
+                "bs=1M",
+                f"count={size_mb}",
+                "status=progress",
+            ]
+            dd_result = subprocess.run(dd_cmd, check=False)
+            if dd_result.returncode != 0:
+                return False, "Falha ao criar arquivo de swap."
+
+        chmod_result = subprocess.run(["chmod", "600", swap_path], check=False)
+        if chmod_result.returncode != 0:
+            return False, "Falha ao ajustar permissoes do swapfile."
+
+        mk_result = subprocess.run(["mkswap", swap_path], check=False)
+        if mk_result.returncode != 0:
+            return False, "Falha ao formatar swapfile com mkswap."
+
+        on_result = subprocess.run(["swapon", swap_path], check=False)
+        if on_result.returncode != 0:
+            return False, "Falha ao ativar swap com swapon."
+
+        try:
+            with open("/etc/fstab", "r") as f:
+                fstab = f.read()
+        except Exception:
+            fstab = ""
+
+        entry = f"{swap_path} none swap sw 0 0"
+        if entry not in fstab:
+            try:
+                with open("/etc/fstab", "a") as f:
+                    f.write(f"\n{entry}\n")
+            except Exception as exc:
+                return False, f"Swap criado, mas falhou ao persistir no fstab: {exc}"
+
+        return True, f"Swap de {size_mb} MB criado e ativado em {swap_path}."
+
+    @staticmethod
+    def measure_server_speed(progress_callback=None):
+        def update(percent, text):
+            if progress_callback:
+                progress_callback(completed=percent, description=f"[cyan]{text}[/cyan]")
+
+        try:
+            # Ping (TCP connect latency approximation)
+            update(5, "Medindo latencia")
+            latencies = []
+            for _ in range(3):
+                start = time.perf_counter()
+                sock = socket.create_connection(("1.1.1.1", 443), timeout=3)
+                sock.close()
+                latencies.append((time.perf_counter() - start) * 1000)
+            ping_ms = round(sum(latencies) / len(latencies), 2) if latencies else 0.0
+
+            # Download test
+            update(20, "Testando download")
+            download_url = "https://speed.hetzner.de/10MB.bin"
+            total_read = 0
+            target_bytes = 5 * 1024 * 1024  # 5 MB for faster test
+            start = time.perf_counter()
+            with requests.get(download_url, stream=True, timeout=20) as response:
+                response.raise_for_status()
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    if not chunk:
+                        continue
+                    total_read += len(chunk)
+                    ratio = min(1.0, total_read / target_bytes)
+                    update(20 + int(ratio * 45), "Testando download")
+                    if total_read >= target_bytes:
+                        break
+            download_seconds = max(time.perf_counter() - start, 0.001)
+            download_mbps = round((total_read * 8) / (download_seconds * 1_000_000), 2)
+
+            # Upload test
+            update(70, "Testando upload")
+            payload = os.urandom(2 * 1024 * 1024)  # 2 MB
+            start = time.perf_counter()
+            response = requests.post("https://httpbin.org/post", data=payload, timeout=25)
+            response.raise_for_status()
+            upload_seconds = max(time.perf_counter() - start, 0.001)
+            upload_mbps = round((len(payload) * 8) / (upload_seconds * 1_000_000), 2)
+            update(95, "Finalizando")
+
+            return True, {
+                "ping_ms": ping_ms,
+                "download_mbps": download_mbps,
+                "upload_mbps": upload_mbps,
+                "download_mb_tested": round(total_read / (1024 * 1024), 2),
+                "upload_mb_tested": round(len(payload) / (1024 * 1024), 2),
+            }
         except Exception as exc:
             return False, str(exc)
