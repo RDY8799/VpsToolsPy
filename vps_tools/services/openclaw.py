@@ -128,12 +128,17 @@ class OpenClawService(Service):
         return not self.is_installed()
 
     def get_version(self) -> str:
-        result = subprocess.run(
-            ["openclaw", "--version"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        if not shutil.which("openclaw"):
+            return "not installed"
+        try:
+            result = subprocess.run(
+                ["openclaw", "--version"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError:
+            return "not installed"
         if result.returncode == 0:
             return (result.stdout or result.stderr).strip() or "unknown"
         return "unknown"
