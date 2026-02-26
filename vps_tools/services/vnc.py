@@ -129,13 +129,6 @@ RestartSec=2
 [Install]
 WantedBy=multi-user.target
 """
-        # usa script de sessao para garantir desktop pronto (XFCE/LXDE fallback)
-        content = content.replace(
-            f"ExecStart={x11vnc_bin} -create -forever -shared -noxdamage -rfbauth "
-            f"{self.pass_file} -rfbport {port}",
-            f"ExecStart={x11vnc_bin} -create -forever -shared -noxdamage "
-            f"-rfbauth {self.pass_file} -rfbport {port} -xstartup {self.session_script}",
-        )
         with open(self.service_path, "w") as f:
             f.write(content)
 
