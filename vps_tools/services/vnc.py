@@ -182,6 +182,19 @@ WantedBy=multi-user.target
         with open(self.desktop_service_path, "w") as f:
             f.write(content)
 
+    def configure_desktop(self):
+        try:
+            self._write_session_script()
+            self._write_desktop_service()
+            subprocess.run(["systemctl", "daemon-reload"], check=False)
+            subprocess.run(["systemctl", "enable", "--now", self.desktop_service_name], check=False)
+            subprocess.run(["systemctl", "restart", self.desktop_service_name], check=False)
+            if self._desktop_running():
+                return True, "Desktop VNC configurado e ativo."
+            return False, "Desktop VNC configurado, mas nao iniciou."
+        except Exception as exc:
+            return False, str(exc)
+
     def get_port(self) -> int:
         if not os.path.exists(self.service_path):
             return 5901

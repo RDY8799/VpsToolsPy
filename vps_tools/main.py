@@ -114,6 +114,7 @@ class VPSToolsApp:
                 "atualizacao do servico": "service update",
                 "alteracao de porta do VNC": "VNC port change",
                 "alteracao de senha do VNC": "VNC password change",
+                "configuracao de desktop VNC": "VNC desktop configuration",
             }
             for k, v in action_map.items():
                 if action == k or action.startswith(k + " "):
@@ -944,6 +945,8 @@ class VPSToolsApp:
                     "06": self._txt("DESINSTALAR VNC", "UNINSTALL VNC"),
                     "00": self.lang.t("menu.back", "VOLTAR"),
                 }
+                if not desktop_configured:
+                    options["07"] = self._txt("CONFIGURAR DESKTOP", "CONFIGURE DESKTOP")
 
             self.ui.draw_menu(options, self._txt("GERENCIAR VNC", "MANAGE VNC"))
             option = self._normalize_option(self.ui.prompt())
@@ -1034,6 +1037,13 @@ class VPSToolsApp:
                     self.ui.print_success(self._txt("VNC desinstalado com sucesso!", "VNC uninstalled successfully!"))
                 else:
                     self.ui.print_error(f"{self.lang.t('common.error_prefix', 'Erro:')} {result}")
+                time.sleep(2)
+            elif option == "7" and installed and (not desktop_configured):
+                if not self._confirm("configuracao de desktop VNC"):
+                    continue
+                self.ui.show_spinner(self._txt("Configurando desktop VNC", "Configuring VNC desktop"))
+                ok, msg = service.configure_desktop()
+                self.ui.print_success(msg) if ok else self.ui.print_error(msg)
                 time.sleep(2)
             elif option == "00":
                 break
