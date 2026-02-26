@@ -25,13 +25,13 @@ class VNCService(Service):
 
     def is_installed(self) -> bool:
         has_bin = subprocess.run(["which", "x11vnc"], capture_output=True, check=False).returncode == 0
-        return (
-            has_bin
-            and os.path.exists(self.service_path)
-            and os.path.exists(self.desktop_service_path)
-            and os.path.exists(self.pass_file)
-            and os.path.exists(self.session_script)
-        )
+        if not has_bin:
+            return False
+        # considera instalado mesmo em cenarios legados/parciais:
+        # binario + servico principal (ou processo ativo) + arquivo de senha
+        has_main_service = os.path.exists(self.service_path)
+        has_password = os.path.exists(self.pass_file)
+        return (has_main_service and has_password) or self.is_running()
 
     @staticmethod
     def _x11vnc_bin() -> str:
@@ -53,6 +53,8 @@ class VNCService(Service):
         return p.returncode == 0
 
     def _desktop_running(self) -> bool:
+        if not os.path.exists(self.desktop_service_path):
+            return False
         try:
             result = subprocess.run(
                 ["systemctl", "is-active", self.desktop_service_name],
@@ -280,5 +282,6 @@ WantedBy=multi-user.target
             "installed": self.is_installed(),
             "running": self.is_running(),
             "desktop_running": self._desktop_running(),
+            "desktop_configured": os.path.exists(self.desktop_service_path),
             "port": self.get_port(),
         }
