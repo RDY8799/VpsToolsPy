@@ -13,6 +13,8 @@ class VNCService(Service):
         super().__init__("VNC", "vps-tools-vnc")
         self.service_name = "vps-tools-vnc"
         self.service_path = f"/etc/systemd/system/{self.service_name}.service"
+        self.desktop_service_name = "vps-tools-vnc-desktop"
+        self.desktop_service_path = f"/etc/systemd/system/{self.desktop_service_name}.service"
         self.pass_file = "/etc/vps-tools/vnc.pass"
         self.session_script = "/usr/local/bin/vps-vnc-session.sh"
 
@@ -23,7 +25,13 @@ class VNCService(Service):
 
     def is_installed(self) -> bool:
         has_bin = subprocess.run(["which", "x11vnc"], capture_output=True, check=False).returncode == 0
-        return has_bin and os.path.exists(self.service_path) and os.path.exists(self.pass_file) and os.path.exists(self.session_script)
+        return (
+            has_bin
+            and os.path.exists(self.service_path)
+            and os.path.exists(self.desktop_service_path)
+            and os.path.exists(self.pass_file)
+            and os.path.exists(self.session_script)
+        )
 
     @staticmethod
     def _x11vnc_bin() -> str:
@@ -44,14 +52,35 @@ class VNCService(Service):
         p = subprocess.run(["pgrep", "-f", "x11vnc"], capture_output=True, check=False)
         return p.returncode == 0
 
+    def _desktop_running(self) -> bool:
+        try:
+            result = subprocess.run(
+                ["systemctl", "is-active", self.desktop_service_name],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0 and result.stdout.strip() == "active":
+                return True
+        except Exception:
+            pass
+        p = subprocess.run(["pgrep", "-f", "xfce4-session|startxfce4"], capture_output=True, check=False)
+        return p.returncode == 0
+
     def start(self) -> bool:
-        return subprocess.run(["systemctl", "start", self.service_name], check=False).returncode == 0
+        ok1 = subprocess.run(["systemctl", "start", self.service_name], check=False).returncode == 0
+        ok2 = subprocess.run(["systemctl", "start", self.desktop_service_name], check=False).returncode == 0
+        return ok1 and ok2
 
     def stop(self) -> bool:
-        return subprocess.run(["systemctl", "stop", self.service_name], check=False).returncode == 0
+        ok2 = subprocess.run(["systemctl", "stop", self.desktop_service_name], check=False).returncode == 0
+        ok1 = subprocess.run(["systemctl", "stop", self.service_name], check=False).returncode == 0
+        return ok1 and ok2
 
     def restart(self) -> bool:
-        return subprocess.run(["systemctl", "restart", self.service_name], check=False).returncode == 0
+        ok1 = subprocess.run(["systemctl", "restart", self.service_name], check=False).returncode == 0
+        ok2 = subprocess.run(["systemctl", "restart", self.desktop_service_name], check=False).returncode == 0
+        return ok1 and ok2
 
     def _install_packages(self):
         if os.path.exists("/etc/debian_version"):
@@ -132,6 +161,25 @@ WantedBy=multi-user.target
         with open(self.service_path, "w") as f:
             f.write(content)
 
+    def _write_desktop_service(self):
+        content = f"""[Unit]
+Description=VPS Tools VNC Desktop Session (XFCE)
+After={self.service_name}.service network.target
+Requires={self.service_name}.service
+PartOf={self.service_name}.service
+
+[Service]
+Type=simple
+ExecStart=/bin/bash -lc 'while [ ! -S /tmp/.X11-unix/X1 ]; do sleep 1; done; export DISPLAY=:1; exec dbus-launch --exit-with-session startxfce4'
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+"""
+        with open(self.desktop_service_path, "w") as f:
+            f.write(content)
+
     def get_port(self) -> int:
         if not os.path.exists(self.service_path):
             return 5901
@@ -175,23 +223,31 @@ WantedBy=multi-user.target
             if not ok:
                 return msg
             self._write_service(port)
+            self._write_desktop_service()
             subprocess.run(["systemctl", "daemon-reload"], check=False)
             subprocess.run(["systemctl", "enable", "--now", self.service_name], check=False)
+            subprocess.run(["systemctl", "enable", "--now", self.desktop_service_name], check=False)
             subprocess.run(["systemctl", "restart", self.service_name], check=False)
+            subprocess.run(["systemctl", "restart", self.desktop_service_name], check=False)
             if not self.is_running():
                 ok, logs = self.read_logs(lines=60)
                 if ok:
                     return f"VNC instalado, mas nao ficou ativo. Logs:\n{logs[-2000:]}"
                 return "VNC instalado, mas nao ficou ativo. Verifique os logs do servico."
+            if not self._desktop_running():
+                return "VNC ativo, mas a sessao grafica nao iniciou. Verifique logs do vps-tools-vnc-desktop."
             return f"VNC instalado. Porta: {port} Senha: {password}"
         except Exception as exc:
             return str(exc)
 
     def uninstall(self):
         try:
+            subprocess.run(["systemctl", "disable", "--now", self.desktop_service_name], check=False)
             subprocess.run(["systemctl", "disable", "--now", self.service_name], check=False)
             if os.path.exists(self.service_path):
                 os.remove(self.service_path)
+            if os.path.exists(self.desktop_service_path):
+                os.remove(self.desktop_service_path)
             if os.path.exists(self.pass_file):
                 os.remove(self.pass_file)
             if os.path.exists(self.session_script):
@@ -223,5 +279,6 @@ WantedBy=multi-user.target
         return {
             "installed": self.is_installed(),
             "running": self.is_running(),
+            "desktop_running": self._desktop_running(),
             "port": self.get_port(),
         }

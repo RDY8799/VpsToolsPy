@@ -902,6 +902,7 @@ class VPSToolsApp:
             info = service.get_status_info()
             installed = info.get("installed", False)
             running = info.get("running", False)
+            desktop_running = info.get("desktop_running", False)
 
             status_text = (
                 f"[bold green]{self.lang.t('service.active', 'ATIVO')}[/]"
@@ -916,6 +917,8 @@ class VPSToolsApp:
             panel = Panel(
                 f"{self._txt('Instalacao', 'Installation')}: {installed_text}\n"
                 f"{self._txt('Execucao', 'Runtime')}: {status_text}\n"
+                f"{self._txt('Desktop', 'Desktop')}: "
+                f"{('[bold green]ATIVO[/]' if desktop_running else '[bold red]INATIVO[/]') if self.lang.current_lang == 'pt' else ('[bold green]ACTIVE[/]' if desktop_running else '[bold red]INACTIVE[/]')}\n"
                 f"{self._txt('Porta', 'Port')}: [cyan]{info.get('port', 5901)}[/]",
                 title=self._txt("VNC MANAGER", "VNC MANAGER"),
                 border_style="cyan",
