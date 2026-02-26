@@ -1,6 +1,7 @@
 import os
 import re
 import secrets
+import shutil
 import string
 import subprocess
 
@@ -24,6 +25,34 @@ class VNCService(Service):
         has_bin = subprocess.run(["which", "x11vnc"], capture_output=True, check=False).returncode == 0
         return has_bin and os.path.exists(self.service_path) and os.path.exists(self.pass_file) and os.path.exists(self.session_script)
 
+    @staticmethod
+    def _x11vnc_bin() -> str:
+        return shutil.which("x11vnc") or "/usr/bin/x11vnc"
+
+    def is_running(self) -> bool:
+        try:
+            result = subprocess.run(
+                ["systemctl", "is-active", self.service_name],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0 and result.stdout.strip() == "active":
+                return True
+        except Exception:
+            pass
+        p = subprocess.run(["pgrep", "-f", "x11vnc"], capture_output=True, check=False)
+        return p.returncode == 0
+
+    def start(self) -> bool:
+        return subprocess.run(["systemctl", "start", self.service_name], check=False).returncode == 0
+
+    def stop(self) -> bool:
+        return subprocess.run(["systemctl", "stop", self.service_name], check=False).returncode == 0
+
+    def restart(self) -> bool:
+        return subprocess.run(["systemctl", "restart", self.service_name], check=False).returncode == 0
+
     def _install_packages(self):
         if os.path.exists("/etc/debian_version"):
             subprocess.run(["apt-get", "update", "-y"], check=True)
@@ -38,6 +67,7 @@ class VNCService(Service):
                     "xorg",
                     "dbus-x11",
                     "xterm",
+                    "xvfb",
                 ],
                 check=True,
             )
@@ -59,11 +89,15 @@ class VNCService(Service):
                         "xorg-x11-xinit",
                         "dbus-x11",
                         "xterm",
+                        "xorg-x11-server-Xvfb",
                     ],
                     check=True,
                 )
             else:
-                subprocess.run(["yum", "-y", "install", "x11vnc", "xorg-x11-server-Xorg", "dbus-x11", "xterm"], check=True)
+                subprocess.run(
+                    ["yum", "-y", "install", "x11vnc", "xorg-x11-server-Xorg", "xorg-x11-server-Xvfb", "dbus-x11", "xterm"],
+                    check=True,
+                )
 
     def _write_session_script(self):
         content = """#!/usr/bin/env bash
@@ -81,13 +115,14 @@ exec xterm
         subprocess.run(["chmod", "+x", self.session_script], check=False)
 
     def _write_service(self, port: int):
+        x11vnc_bin = self._x11vnc_bin()
         content = f"""[Unit]
 Description=VPS Tools VNC (x11vnc)
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/x11vnc -create -forever -shared -noxdamage -rfbauth {self.pass_file} -rfbport {port}
+ExecStart={x11vnc_bin} -create -forever -shared -noxdamage -rfbauth {self.pass_file} -rfbport {port}
 Restart=always
 RestartSec=2
 
@@ -96,9 +131,9 @@ WantedBy=multi-user.target
 """
         # usa script de sessao para garantir desktop pronto (XFCE/LXDE fallback)
         content = content.replace(
-            "ExecStart=/usr/bin/x11vnc -create -forever -shared -noxdamage -rfbauth "
+            f"ExecStart={x11vnc_bin} -create -forever -shared -noxdamage -rfbauth "
             f"{self.pass_file} -rfbport {port}",
-            "ExecStart=/usr/bin/x11vnc -create -forever -shared -noxdamage "
+            f"ExecStart={x11vnc_bin} -create -forever -shared -noxdamage "
             f"-rfbauth {self.pass_file} -rfbport {port} -xstartup {self.session_script}",
         )
         with open(self.service_path, "w") as f:
@@ -150,6 +185,11 @@ WantedBy=multi-user.target
             subprocess.run(["systemctl", "daemon-reload"], check=False)
             subprocess.run(["systemctl", "enable", "--now", self.service_name], check=False)
             subprocess.run(["systemctl", "restart", self.service_name], check=False)
+            if not self.is_running():
+                ok, logs = self.read_logs(lines=60)
+                if ok:
+                    return f"VNC instalado, mas nao ficou ativo. Logs:\n{logs[-2000:]}"
+                return "VNC instalado, mas nao ficou ativo. Verifique os logs do servico."
             return f"VNC instalado. Porta: {port} Senha: {password}"
         except Exception as exc:
             return str(exc)
@@ -170,6 +210,7 @@ WantedBy=multi-user.target
                 subprocess.run(["apt-get", "autoremove", "-y"], check=False)
             else:
                 subprocess.run(["yum", "remove", "-y", "x11vnc"], check=False)
+                subprocess.run(["yum", "remove", "-y", "xorg-x11-server-Xvfb"], check=False)
             return True
         except Exception as exc:
             return str(exc)
