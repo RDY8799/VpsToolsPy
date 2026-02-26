@@ -20,11 +20,13 @@ from vps_tools.services.dropbear import DropbearService
 from vps_tools.services.dnstt import DNSTTService
 from vps_tools.services.hysteria import HysteriaService
 from vps_tools.services.openvpn import OpenVPNService
+from vps_tools.services.openclaw import OpenClawService
 from vps_tools.services.shadowsocks import ShadowSocksService
 from vps_tools.services.squid import SquidService
 from vps_tools.services.sslh import SSLHService
 from vps_tools.services.stunnel import StunnelService
 from vps_tools.services.trojan import TrojanService
+from vps_tools.services.vnc import VNCService
 from vps_tools.services.xray import XrayService
 from vps_tools.ui.terminal import TerminalUI
 
@@ -45,12 +47,14 @@ class VPSToolsApp:
             "STUNNEL": StunnelService(),
             "DROPBEAR": DropbearService(),
             "OPENVPN": OpenVPNService(),
+            "OPENCLAW": OpenClawService(),
             "SHADOWSOCKS": ShadowSocksService(),
             "XRAY": XrayService(),
             "HYSTERIA": HysteriaService(),
             "DNSTT": DNSTTService(),
             "BADVPN": BadVPNService(),
             "TROJAN": TrojanService(),
+            "VNC": VNCService(),
             "DOMAIN_AUDIT": DomainAuditService(),
         }
 
@@ -107,6 +111,9 @@ class VPSToolsApp:
                 "criar swap 1024 MB": "create 1024 MB swap",
                 "criar comando global 'menu'": "create global command 'menu'",
                 "execucao de domain audit": "domain audit execution",
+                "atualizacao do servico": "service update",
+                "alteracao de porta do VNC": "VNC port change",
+                "alteracao de senha do VNC": "VNC password change",
             }
             for k, v in action_map.items():
                 if action == k or action.startswith(k + " "):
@@ -426,6 +433,12 @@ class VPSToolsApp:
     def generic_service_menu(self, service_name):
         if service_name == "DOMAIN_AUDIT":
             self.domain_audit_service_menu()
+            return
+        if service_name == "OPENCLAW":
+            self.openclaw_menu()
+            return
+        if service_name == "VNC":
+            self.vnc_menu()
             return
 
         service = self.services[service_name]
@@ -751,6 +764,8 @@ class VPSToolsApp:
                 "10": self.lang.t("tools.speed", "TESTE DE VELOCIDADE"),
                 "11": self.lang.t("tools.power", "POWER TOOLS"),
                 "12": self.lang.t("tools.domain_audit", "DOMAIN AUDIT"),
+                "13": self._txt("GERENCIAR OPENCLAW", "MANAGE OPENCLAW"),
+                "14": self._txt("GERENCIAR VNC", "MANAGE VNC"),
                 "00": self.lang.t("menu.back", "VOLTAR"),
             }
             self.ui.draw_menu(options, self.lang.t("tools.title", "FERRAMENTAS"))
@@ -870,11 +885,274 @@ class VPSToolsApp:
                 self.power_tools_menu()
             elif option == "12":
                 self.domain_audit_service_menu()
+            elif option == "13":
+                self.openclaw_menu()
+            elif option == "14":
+                self.vnc_menu()
             elif option == "00":
                 break
             else:
                 self.ui.print_error(self.lang.t("menu.invalid", "Opcao invalida!"))
                 time.sleep(2)
+
+    def vnc_menu(self):
+        service = self.services["VNC"]
+        while True:
+            self.ui.clear()
+            info = service.get_status_info()
+            installed = info.get("installed", False)
+            running = info.get("running", False)
+
+            status_text = (
+                f"[bold green]{self.lang.t('service.active', 'ATIVO')}[/]"
+                if running
+                else f"[bold red]{self.lang.t('service.inactive', 'INATIVO')}[/]"
+            )
+            installed_text = (
+                f"[bold green]{self.lang.t('service.installed', 'INSTALADO')}[/]"
+                if installed
+                else f"[bold red]{self.lang.t('service.not_installed', 'NAO INSTALADO')}[/]"
+            )
+            panel = Panel(
+                f"{self._txt('Instalacao', 'Installation')}: {installed_text}\n"
+                f"{self._txt('Execucao', 'Runtime')}: {status_text}\n"
+                f"{self._txt('Porta', 'Port')}: [cyan]{info.get('port', 5901)}[/]",
+                title=self._txt("VNC MANAGER", "VNC MANAGER"),
+                border_style="cyan",
+            )
+            self.ui.console.print(panel)
+
+            if not installed:
+                options = {
+                    "01": self._txt("INSTALAR VNC", "INSTALL VNC"),
+                    "00": self.lang.t("menu.back", "VOLTAR"),
+                }
+            else:
+                options = {
+                    "01": self.lang.t("service.stop", "PARAR SERVICO")
+                    if running
+                    else self.lang.t("service.start", "INICIAR SERVICO"),
+                    "02": self.lang.t("service.restart", "REINICIAR SERVICO"),
+                    "03": self._txt("ALTERAR PORTA", "CHANGE PORT"),
+                    "04": self._txt("ALTERAR SENHA", "CHANGE PASSWORD"),
+                    "05": self._txt("VER LOGS", "VIEW LOGS"),
+                    "06": self._txt("DESINSTALAR VNC", "UNINSTALL VNC"),
+                    "00": self.lang.t("menu.back", "VOLTAR"),
+                }
+
+            self.ui.draw_menu(options, self._txt("GERENCIAR VNC", "MANAGE VNC"))
+            option = self._normalize_option(self.ui.prompt())
+
+            if option == "1":
+                if not installed:
+                    if not self._confirm("instalacao do servico VNC"):
+                        continue
+                    port = self._ask_port(self._txt("Porta VNC (padrao 5901): ", "VNC port (default 5901): "), 5901)
+                    if port is None:
+                        continue
+                    ok_port, port = self._resolve_port_conflict(port, "VNC")
+                    if not ok_port:
+                        continue
+                    password = self.ui.prompt(
+                        self._txt("Senha VNC (vazio para auto): ", "VNC password (empty for auto): ")
+                    ).strip()
+                    self.ui.show_spinner(self._txt("Instalando VNC", "Installing VNC"))
+                    result = service.install(port=port, password=password)
+                    if isinstance(result, str) and ("vnc instalado" in result.lower() or "vnc installed" in result.lower()):
+                        self.ui.print_success(result)
+                    elif result is True:
+                        self.ui.print_success(self._txt("VNC instalado com sucesso!", "VNC installed successfully!"))
+                    else:
+                        self.ui.print_error(f"{self.lang.t('common.error_prefix', 'Erro:')} {result}")
+                    time.sleep(2)
+                else:
+                    if running:
+                        if not self._confirm("parada do servico VNC"):
+                            continue
+                        ok = service.stop()
+                        self.ui.print_success(self.lang.t("service.stop_ok", "Servico parado!")) if ok else self.ui.print_error(
+                            self._txt("Falha ao parar VNC.", "Failed to stop VNC.")
+                        )
+                    else:
+                        if not self._confirm("inicio do servico VNC"):
+                            continue
+                        ok = service.start()
+                        self.ui.print_success(self.lang.t("service.start_ok", "Servico iniciado!")) if ok else self.ui.print_error(
+                            self._txt("Falha ao iniciar VNC.", "Failed to start VNC.")
+                        )
+                    time.sleep(2)
+            elif option == "2" and installed:
+                if not self._confirm("reinicio do servico VNC"):
+                    continue
+                ok = service.restart()
+                self.ui.print_success(self.lang.t("service.restart_ok", "Servico reiniciado!")) if ok else self.ui.print_error(
+                    self._txt("Falha ao reiniciar VNC.", "Failed to restart VNC.")
+                )
+                time.sleep(2)
+            elif option == "3" and installed:
+                if not self._confirm("alteracao de porta do VNC"):
+                    continue
+                new_port = self._ask_port(self._txt("Nova porta VNC: ", "New VNC port: "), info.get("port", 5901))
+                if new_port is None:
+                    continue
+                ok_port, new_port = self._resolve_port_conflict(new_port, "VNC")
+                if not ok_port:
+                    continue
+                ok, msg = service.set_port(new_port)
+                self.ui.print_success(msg) if ok else self.ui.print_error(msg)
+                time.sleep(2)
+            elif option == "4" and installed:
+                if not self._confirm("alteracao de senha do VNC"):
+                    continue
+                new_password = self.ui.prompt(self._txt("Nova senha VNC: ", "New VNC password: ")).strip()
+                ok, msg = service.set_password(new_password)
+                self.ui.print_success(msg) if ok else self.ui.print_error(msg)
+                time.sleep(2)
+            elif option == "5" and installed:
+                lines_raw = self.ui.prompt(self._txt("Qtd linhas (padrao 120): ", "Line count (default 120): ")).strip()
+                try:
+                    lines = int(lines_raw) if lines_raw else 120
+                except ValueError:
+                    lines = 120
+                ok, logs = service.read_logs(lines=lines)
+                if ok:
+                    self.ui.console.print(Panel(logs[-7000:], title=self._txt("LOGS VNC", "VNC LOGS"), border_style="blue"))
+                else:
+                    self.ui.print_error(logs)
+                self.ui.prompt(self.lang.t("common.enter_back", "Enter para voltar..."))
+            elif option == "6" and installed:
+                if not self._confirm("desinstalacao do servico VNC"):
+                    continue
+                self.ui.show_spinner(self._txt("Desinstalando VNC", "Uninstalling VNC"))
+                result = service.uninstall()
+                if result is True:
+                    self.ui.print_success(self._txt("VNC desinstalado com sucesso!", "VNC uninstalled successfully!"))
+                else:
+                    self.ui.print_error(f"{self.lang.t('common.error_prefix', 'Erro:')} {result}")
+                time.sleep(2)
+            elif option == "00":
+                break
+            else:
+                self.ui.print_error(self.lang.t("menu.invalid", "Opcao invalida!"))
+                time.sleep(1)
+
+    def openclaw_menu(self):
+        service = self.services["OPENCLAW"]
+        while True:
+            self.ui.clear()
+            info = service.get_status_info()
+            installed = info.get("installed", False)
+            running = info.get("running", False)
+            status_text = (
+                f"[bold green]{self.lang.t('service.active', 'ATIVO')}[/]"
+                if running
+                else f"[bold red]{self.lang.t('service.inactive', 'INATIVO')}[/]"
+            )
+            installed_text = (
+                f"[bold green]{self.lang.t('service.installed', 'INSTALADO')}[/]"
+                if installed
+                else f"[bold red]{self.lang.t('service.not_installed', 'NAO INSTALADO')}[/]"
+            )
+
+            panel = Panel(
+                f"{self._txt('Instalacao', 'Installation')}: {installed_text}\n"
+                f"{self._txt('Execucao', 'Runtime')}: {status_text}\n"
+                f"{self._txt('Versao', 'Version')}: [cyan]{info.get('version', 'unknown')}[/]\n"
+                f"{self._txt('Unidades', 'Units')}: [cyan]{info.get('units', '-')}[/]",
+                title=self._txt("OPENCLAW MANAGER", "OPENCLAW MANAGER"),
+                border_style="cyan",
+            )
+            self.ui.console.print(panel)
+
+            if not installed:
+                options = {
+                    "01": self._txt("INSTALAR OPENCLAW", "INSTALL OPENCLAW"),
+                    "00": self.lang.t("menu.back", "VOLTAR"),
+                }
+            else:
+                options = {
+                    "01": self.lang.t("service.stop", "PARAR SERVICO")
+                    if running
+                    else self.lang.t("service.start", "INICIAR SERVICO"),
+                    "02": self.lang.t("service.restart", "REINICIAR SERVICO"),
+                    "03": self._txt("ATUALIZAR OPENCLAW", "UPDATE OPENCLAW"),
+                    "04": self._txt("VER LOGS", "VIEW LOGS"),
+                    "05": self._txt("DESINSTALAR OPENCLAW", "UNINSTALL OPENCLAW"),
+                    "00": self.lang.t("menu.back", "VOLTAR"),
+                }
+
+            self.ui.draw_menu(options, self._txt("GERENCIAR OPENCLAW", "MANAGE OPENCLAW"))
+            option = self._normalize_option(self.ui.prompt())
+
+            if option == "1":
+                if not installed:
+                    if not self._confirm("instalacao do servico OPENCLAW"):
+                        continue
+                    self.ui.show_spinner(self._txt("Instalando OPENCLAW", "Installing OPENCLAW"))
+                    result = service.install()
+                    if result is True:
+                        self.ui.print_success(self._txt("OpenClaw instalado com sucesso!", "OpenClaw installed successfully!"))
+                    else:
+                        self.ui.print_error(f"{self.lang.t('common.error_prefix', 'Erro:')} {result}")
+                    time.sleep(2)
+                else:
+                    if running:
+                        if not self._confirm("parada do servico OPENCLAW"):
+                            continue
+                        ok = service.stop()
+                        self.ui.print_success(self.lang.t("service.stop_ok", "Servico parado!")) if ok else self.ui.print_error(
+                            self._txt("Falha ao parar OpenClaw.", "Failed to stop OpenClaw.")
+                        )
+                    else:
+                        if not self._confirm("inicio do servico OPENCLAW"):
+                            continue
+                        ok = service.start()
+                        self.ui.print_success(self.lang.t("service.start_ok", "Servico iniciado!")) if ok else self.ui.print_error(
+                            self._txt("Falha ao iniciar OpenClaw.", "Failed to start OpenClaw.")
+                        )
+                    time.sleep(2)
+            elif option == "2" and installed:
+                if not self._confirm("reinicio do servico OPENCLAW"):
+                    continue
+                ok = service.restart()
+                self.ui.print_success(self.lang.t("service.restart_ok", "Servico reiniciado!")) if ok else self.ui.print_error(
+                    self._txt("Falha ao reiniciar OpenClaw.", "Failed to restart OpenClaw.")
+                )
+                time.sleep(2)
+            elif option == "3" and installed:
+                if not self._confirm("atualizacao do servico OPENCLAW"):
+                    continue
+                self.ui.show_spinner(self._txt("Atualizando OPENCLAW", "Updating OPENCLAW"))
+                ok, msg = service.update()
+                self.ui.print_success(msg) if ok else self.ui.print_error(msg)
+                time.sleep(2)
+            elif option == "4" and installed:
+                lines_raw = self.ui.prompt(self._txt("Qtd linhas (padrao 120): ", "Line count (default 120): ")).strip()
+                try:
+                    lines = int(lines_raw) if lines_raw else 120
+                except ValueError:
+                    lines = 120
+                ok, logs = service.read_logs(lines=lines)
+                if ok:
+                    self.ui.console.print(Panel(logs[-7000:], title=self._txt("LOGS OPENCLAW", "OPENCLAW LOGS"), border_style="blue"))
+                else:
+                    self.ui.print_error(logs)
+                self.ui.prompt(self.lang.t("common.enter_back", "Enter para voltar..."))
+            elif option == "5" and installed:
+                if not self._confirm("desinstalacao do servico OPENCLAW"):
+                    continue
+                self.ui.show_spinner(self._txt("Desinstalando OPENCLAW", "Uninstalling OPENCLAW"))
+                ok = service.uninstall()
+                if ok:
+                    self.ui.print_success(self._txt("OpenClaw desinstalado com sucesso!", "OpenClaw uninstalled successfully!"))
+                else:
+                    self.ui.print_error(self._txt("OpenClaw ainda consta instalado. Verifique manualmente.", "OpenClaw still appears installed. Check manually."))
+                time.sleep(2)
+            elif option == "00":
+                break
+            else:
+                self.ui.print_error(self.lang.t("menu.invalid", "Opcao invalida!"))
+                time.sleep(1)
 
     def hosts_menu(self):
         while True:

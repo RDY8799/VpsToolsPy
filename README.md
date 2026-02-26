@@ -1,10 +1,10 @@
 # VpsToolsPy
 
-Suite de gerenciamento de VPS em Python para automação de serviços, usuários e ferramentas operacionais.
+Suite de gerenciamento de VPS em Python para automacao de servicos, usuarios e ferramentas operacionais.
 
 ## Recursos
 
-- Instalador e gerenciador de serviços:
+- Instalador e gerenciador de servicos:
   - Squid
   - SSLH
   - Stunnel
@@ -16,24 +16,26 @@ Suite de gerenciamento de VPS em Python para automação de serviços, usuários
   - DNSTT
   - BadVPN
   - Trojan
-- Gerenciamento de usuários SSH
-- Backup/restore de usuários
+  - OpenClaw (instalacao oficial + gerenciamento dedicado)
+  - VNC (instalacao e gerenciamento completo)
+- Gerenciamento de usuarios SSH
+- Backup/restore de usuarios
 - Power Tools:
   - Port changer
   - Dashboard de status
   - Logs viewer
-  - Backup/restore de configurações
+  - Backup/restore de configuracoes
   - Firewall manager
   - Health check
-  - Rollback de configuração
+  - Rollback de configuracao
   - Setup wizard
   - Idioma PT/EN
 - Ferramentas do sistema:
-  - Atualização do sistema
-  - Criação de swap
+  - Atualizacao do sistema
+  - Criacao de swap
   - Teste de velocidade
-  - Criação de comando global (ex: `menu`)
-  - Desinstalação completa
+  - Criacao de comando global (ex: `menu`)
+  - Desinstalacao completa
 
 ## Requisitos
 
@@ -42,7 +44,7 @@ Suite de gerenciamento de VPS em Python para automação de serviços, usuários
 - Python 3.10+
 - Git
 
-## Instalação (Debian/Ubuntu)
+## Instalacao (Debian/Ubuntu)
 
 ```bash
 sudo -i
@@ -56,7 +58,7 @@ pip install -r requirements.txt
 python -m vps_tools.main
 ```
 
-## Instalação (CentOS/RHEL)
+## Instalacao (CentOS/RHEL)
 
 ```bash
 sudo -i
@@ -69,16 +71,52 @@ pip install -r requirements.txt
 python -m vps_tools.main
 ```
 
-## Uso rápido
+## Modulo OpenClaw (destaque)
+
+O OpenClaw foi integrado como modulo oficial no menu de servicos e em Ferramentas.
+
+- Instalacao usa o comando oficial do projeto:
+
+```bash
+curl -fsSL https://openclaw.ai/install.sh | bash
+```
+
+- No app, o modulo OpenClaw oferece:
+  - instalar
+  - iniciar/parar
+  - reiniciar
+  - atualizar
+  - visualizar logs
+  - desinstalar
+  - status em tempo real: `INSTALADO/NAO INSTALADO` e `ATIVO/INATIVO`
+
+Referencias:
+- Site: `https://openclaw.ai/`
+- Instalador: `https://openclaw.ai/install.sh`
+
+## Modulo VNC
+
+Modulo dedicado para VNC com:
+
+- instalar com porta personalizada
+- senha manual ou automatica
+- iniciar/parar/reiniciar
+- alterar porta (com validacao de conflito)
+- alterar senha
+- logs
+- desinstalacao
+- status `INSTALADO/NAO INSTALADO`
+
+## Uso rapido
 
 1. Execute `python -m vps_tools.main`
 2. Menu principal:
-   - `01` Instalador/configuração de serviços
-   - `02` Gerenciamento de usuários
+   - `01` Instalador/configuracao de servicos
+   - `02` Gerenciamento de usuarios
    - `03` Ferramentas do sistema
 3. Todos os menus aceitam `1` e `01` (ou equivalente)
-4. Ações críticas pedem confirmação
-5. Seleção de usuário suporta setas + Enter ou digitação manual
+4. Acoes criticas pedem confirmacao
+5. Selecao de usuario suporta setas + Enter ou digitacao manual
 
 ## Comando global (`menu`)
 
@@ -87,13 +125,13 @@ No app:
 - Ferramentas -> Criar comando global
 - Defina o nome do comando (ex: `menu`)
 
-Depois disso, você poderá iniciar a ferramenta apenas digitando:
+Depois disso, voce pode iniciar a ferramenta apenas digitando:
 
 ```bash
 menu
 ```
 
-## Atualização
+## Atualizacao
 
 No servidor:
 
@@ -105,17 +143,17 @@ pip install -r requirements.txt
 python -m vps_tools.main
 ```
 
-Ou use o módulo interno:
+Ou use o modulo interno:
 
 - Ferramentas -> Atualizar script
 
-## Observações importantes
+## Observacoes importantes
 
-- Rode como `root` para instalação/remoção de serviços e ajustes de rede.
-- Para módulos com host/domínio, o DNS deve apontar para o IP da VPS.
-- Em caso de conflito de porta, o sistema oferece:
+- Rode como `root` para instalacao/remocao de servicos e ajustes de rede.
+- Para modulos com host/dominio, o DNS deve apontar para o IP da VPS.
+- Em conflito de porta, o sistema permite:
   - escolher outra porta, ou
-  - mover a porta do serviço ocupante e reiniciar automaticamente.
+  - mover a porta do servico ocupante e reiniciar automaticamente.
 
 ## Estrutura do projeto
 
@@ -127,6 +165,6 @@ vps_tools/
   main.py
 ```
 
-## Licença
+## Licenca
 
-Uso conforme o repositório oficial.
+Uso conforme o repositorio oficial.
