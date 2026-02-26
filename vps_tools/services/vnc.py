@@ -13,6 +13,7 @@ class VNCService(Service):
         self.service_name = "vps-tools-vnc"
         self.service_path = f"/etc/systemd/system/{self.service_name}.service"
         self.pass_file = "/etc/vps-tools/vnc.pass"
+        self.session_script = "/usr/local/bin/vps-vnc-session.sh"
 
     @staticmethod
     def _random_password(length: int = 10) -> str:
@@ -21,14 +22,63 @@ class VNCService(Service):
 
     def is_installed(self) -> bool:
         has_bin = subprocess.run(["which", "x11vnc"], capture_output=True, check=False).returncode == 0
-        return has_bin and os.path.exists(self.service_path) and os.path.exists(self.pass_file)
+        return has_bin and os.path.exists(self.service_path) and os.path.exists(self.pass_file) and os.path.exists(self.session_script)
 
     def _install_packages(self):
         if os.path.exists("/etc/debian_version"):
             subprocess.run(["apt-get", "update", "-y"], check=True)
-            subprocess.run(["apt-get", "install", "-y", "x11vnc"], check=True)
+            subprocess.run(
+                [
+                    "apt-get",
+                    "install",
+                    "-y",
+                    "x11vnc",
+                    "xfce4",
+                    "xfce4-goodies",
+                    "xorg",
+                    "dbus-x11",
+                    "xterm",
+                ],
+                check=True,
+            )
         else:
-            subprocess.run(["yum", "-y", "install", "x11vnc"], check=True)
+            subprocess.run(["yum", "-y", "install", "epel-release"], check=False)
+            # Tenta perfil XFCE completo; se falhar, tenta pacotes comuns.
+            group_try = subprocess.run(["yum", "-y", "groupinstall", "Xfce"], check=False)
+            if group_try.returncode != 0:
+                subprocess.run(
+                    [
+                        "yum",
+                        "-y",
+                        "install",
+                        "x11vnc",
+                        "xfce4-session",
+                        "xfce4-panel",
+                        "thunar",
+                        "xorg-x11-server-Xorg",
+                        "xorg-x11-xinit",
+                        "dbus-x11",
+                        "xterm",
+                    ],
+                    check=True,
+                )
+            else:
+                subprocess.run(["yum", "-y", "install", "x11vnc", "xorg-x11-server-Xorg", "dbus-x11", "xterm"], check=True)
+
+    def _write_session_script(self):
+        content = """#!/usr/bin/env bash
+set -e
+if command -v startxfce4 >/dev/null 2>&1; then
+  exec dbus-launch --exit-with-session startxfce4
+fi
+if command -v startlxde >/dev/null 2>&1; then
+  exec dbus-launch --exit-with-session startlxde
+fi
+exec xterm
+"""
+        with open(self.session_script, "w") as f:
+            f.write(content)
+        subprocess.run(["chmod", "+x", self.session_script], check=False)
 
     def _write_service(self, port: int):
         content = f"""[Unit]
@@ -44,6 +94,13 @@ RestartSec=2
 [Install]
 WantedBy=multi-user.target
 """
+        # usa script de sessao para garantir desktop pronto (XFCE/LXDE fallback)
+        content = content.replace(
+            "ExecStart=/usr/bin/x11vnc -create -forever -shared -noxdamage -rfbauth "
+            f"{self.pass_file} -rfbport {port}",
+            "ExecStart=/usr/bin/x11vnc -create -forever -shared -noxdamage "
+            f"-rfbauth {self.pass_file} -rfbport {port} -xstartup {self.session_script}",
+        )
         with open(self.service_path, "w") as f:
             f.write(content)
 
@@ -85,6 +142,7 @@ WantedBy=multi-user.target
             if not password:
                 password = self._random_password()
             self._install_packages()
+            self._write_session_script()
             ok, msg = self.set_password(password)
             if not ok:
                 return msg
@@ -103,6 +161,8 @@ WantedBy=multi-user.target
                 os.remove(self.service_path)
             if os.path.exists(self.pass_file):
                 os.remove(self.pass_file)
+            if os.path.exists(self.session_script):
+                os.remove(self.session_script)
             subprocess.run(["systemctl", "daemon-reload"], check=False)
 
             if os.path.exists("/etc/debian_version"):

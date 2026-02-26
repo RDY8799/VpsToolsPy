@@ -1236,6 +1236,7 @@ class VPSToolsApp:
                 "07": self.lang.t("power.rollback", "ROLLBACK"),
                 "08": self.lang.t("power.wizard", "SETUP WIZARD"),
                 "09": self.lang.t("power.language", "IDIOMA / LANGUAGE"),
+                "10": self.lang.t("power.ports_live", "PORTAS EM USO"),
                 "00": self.lang.t("menu.back", "VOLTAR"),
             }
             self.ui.draw_menu(options, self.lang.t("power.title", "POWER TOOLS"))
@@ -1259,11 +1260,82 @@ class VPSToolsApp:
                 self.setup_wizard_menu()
             elif option == "9":
                 self.language_menu()
+            elif option == "10":
+                self.ports_in_use_menu()
             elif option == "00":
                 break
             else:
                 self.ui.print_error(self.lang.t("menu.invalid", "Opcao invalida!"))
                 time.sleep(1)
+
+    def ports_in_use_menu(self):
+        protocol = self.ui.prompt(self._txt("Protocolo (tcp/udp, vazio=todos): ", "Protocol (tcp/udp, empty=all): ")).strip().lower()
+        if protocol not in {"", "tcp", "udp"}:
+            self.ui.print_error(self._txt("Protocolo invalido.", "Invalid protocol."))
+            time.sleep(1)
+            return
+
+        port_raw = self.ui.prompt(self._txt("Filtrar porta (vazio=todas): ", "Port filter (empty=all): ")).strip()
+        process_filter = self.ui.prompt(self._txt("Filtrar processo (vazio=todos): ", "Process filter (empty=all): ")).strip().lower()
+        port_filter = 0
+        if port_raw:
+            try:
+                port_filter = int(port_raw)
+            except ValueError:
+                self.ui.print_error(self.lang.t("common.invalid_port", "Porta invalida."))
+                time.sleep(1)
+                return
+
+        ok, rows = self.power_tools.list_listening_ports(
+            protocol=protocol,
+            port_filter=port_filter,
+            process_filter=process_filter,
+        )
+        if not ok:
+            self.ui.print_error(self._txt("Nao foi possivel listar portas (ss indisponivel).", "Could not list ports (ss unavailable)."))
+            time.sleep(2)
+            return
+
+        tcp_count = sum(1 for r in rows if r["proto"] == "TCP")
+        udp_count = sum(1 for r in rows if r["proto"] == "UDP")
+        procs = sorted({r["process"] for r in rows if r["process"] and r["process"] != "unknown"})
+
+        summary = Panel(
+            f"[bold white]{self._txt('Total de portas', 'Total ports')}:[/bold white] [cyan]{len(rows)}[/cyan]  "
+            f"[bold white]TCP:[/bold white] [green]{tcp_count}[/green]  "
+            f"[bold white]UDP:[/bold white] [yellow]{udp_count}[/yellow]\n"
+            f"[bold white]{self._txt('Processos', 'Processes')}:[/bold white] "
+            f"[cyan]{', '.join(procs[:12]) if procs else '-'}[/cyan]",
+            title=self._txt("RESUMO DE PORTAS", "PORT SUMMARY"),
+            border_style="magenta",
+        )
+        self.ui.console.print(summary)
+
+        table = Table(
+            title=self._txt("[bold yellow]PORTAS EM USO[/bold yellow]", "[bold yellow]USED PORTS[/bold yellow]"),
+            caption="[bold cyan]RDY SOFTWARE[/bold cyan]",
+            expand=True,
+        )
+        table.add_column("PROTO", style="cyan", justify="center", width=8)
+        table.add_column("HOST", style="white", overflow="fold")
+        table.add_column("PORTA" if self.lang.current_lang == "pt" else "PORT", style="yellow", justify="right", width=8)
+        table.add_column("PROCESSO" if self.lang.current_lang == "pt" else "PROCESS", style="green", overflow="fold")
+        table.add_column("PID", style="magenta", justify="right", width=8)
+
+        if rows:
+            for row in rows:
+                proto_style = "green" if row["proto"] == "TCP" else "yellow"
+                table.add_row(
+                    f"[{proto_style}]{row['proto']}[/{proto_style}]",
+                    row["host"] or "*",
+                    row["port"] or "-",
+                    row["process"],
+                    row["pid"],
+                )
+        else:
+            table.add_row("-", "-", "-", self._txt("Nenhuma porta encontrada para o filtro.", "No ports found for this filter."), "-")
+        self.ui.console.print(table)
+        self.ui.prompt(self.lang.t("common.enter_back", "Enter para voltar..."))
 
     def port_changer_menu(self):
         if not self._confirm("alteracao de portas"):

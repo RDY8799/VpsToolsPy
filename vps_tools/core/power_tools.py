@@ -357,6 +357,76 @@ class PowerTools:
         return len(issues) == 0, issues
 
     @staticmethod
+    def _split_host_port(endpoint: str) -> Tuple[str, str]:
+        ep = (endpoint or "").strip()
+        if ep == "*":
+            return "*", ""
+        if ep.startswith("[") and "]:" in ep:
+            host, port = ep.rsplit("]:", 1)
+            return host.lstrip("["), port
+        if ":" in ep:
+            host, port = ep.rsplit(":", 1)
+            return host, port
+        return ep, ""
+
+    @staticmethod
+    def list_listening_ports(
+        protocol: str = "",
+        port_filter: int = 0,
+        process_filter: str = "",
+    ) -> Tuple[bool, List[Dict[str, str]]]:
+        cmd = ["ss", "-lntupH"]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            return False, []
+
+        rows: List[Dict[str, str]] = []
+        protocol = (protocol or "").strip().lower()
+        process_filter = (process_filter or "").strip().lower()
+
+        for raw in result.stdout.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            parts = line.split(maxsplit=6)
+            if len(parts) < 5:
+                continue
+
+            proto = parts[0].lower()
+            local = parts[4]
+            users = parts[6] if len(parts) >= 7 else ""
+            host, port = PowerTools._split_host_port(local)
+            process = "unknown"
+            pid = "-"
+            m_proc = re.search(r'users:\(\("([^"]+)"', users)
+            if m_proc:
+                process = m_proc.group(1)
+            m_pid = re.search(r"pid=(\d+)", users)
+            if m_pid:
+                pid = m_pid.group(1)
+
+            if protocol and proto != protocol:
+                continue
+            if port_filter and str(port_filter) != str(port):
+                continue
+            if process_filter and process_filter not in process.lower():
+                continue
+
+            rows.append(
+                {
+                    "proto": proto.upper(),
+                    "host": host,
+                    "port": str(port),
+                    "process": process,
+                    "pid": pid,
+                    "raw": line,
+                }
+            )
+
+        rows.sort(key=lambda x: (x["proto"], int(x["port"]) if x["port"].isdigit() else 0, x["process"]))
+        return True, rows
+
+    @staticmethod
     def save_rollback_snapshot(service_name: str) -> Tuple[bool, str]:
         targets = {
             "ssh": ["/etc/ssh/sshd_config"],
