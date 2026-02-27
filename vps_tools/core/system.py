@@ -334,3 +334,92 @@ class SystemActions:
             }
         except Exception as exc:
             return False, str(exc)
+
+    @staticmethod
+    def install_browser(browser: str):
+        browser = (browser or "").strip().lower()
+        manager = SystemActions._package_manager()
+        if manager not in {"apt", "yum"}:
+            return False, "Gerenciador de pacotes nao suportado."
+
+        try:
+            if browser == "firefox":
+                if manager == "apt":
+                    subprocess.run(["apt-get", "update", "-y"], check=True)
+                    subprocess.run(["apt-get", "install", "-y", "firefox"], check=True)
+                else:
+                    subprocess.run(["yum", "-y", "install", "firefox"], check=True)
+                return True, "Firefox instalado com sucesso."
+
+            if browser == "chromium":
+                if manager == "apt":
+                    subprocess.run(["apt-get", "update", "-y"], check=True)
+                    subprocess.run(["apt-get", "install", "-y", "chromium-browser"], check=False)
+                    # fallback para distros que usam pacote chromium
+                    if shutil.which("chromium-browser") is None:
+                        subprocess.run(["apt-get", "install", "-y", "chromium"], check=True)
+                else:
+                    subprocess.run(["yum", "-y", "install", "chromium"], check=True)
+                return True, "Chromium instalado com sucesso."
+
+            if browser == "brave":
+                if manager == "apt":
+                    subprocess.run(["apt-get", "update", "-y"], check=True)
+                    subprocess.run(["apt-get", "install", "-y", "curl", "gnupg"], check=True)
+                    subprocess.run(
+                        ["bash", "-lc", "curl -fsSLo /usr/share/keyrings/brave-browser-archive-keyring.gpg https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg"],
+                        check=True,
+                    )
+                    subprocess.run(
+                        [
+                            "bash",
+                            "-lc",
+                            "echo 'deb [signed-by=/usr/share/keyrings/brave-browser-archive-keyring.gpg] https://brave-browser-apt-release.s3.brave.com/ stable main' > /etc/apt/sources.list.d/brave-browser-release.list",
+                        ],
+                        check=True,
+                    )
+                    subprocess.run(["apt-get", "update", "-y"], check=True)
+                    subprocess.run(["apt-get", "install", "-y", "brave-browser"], check=True)
+                else:
+                    return False, "Brave automatico suportado apenas em Debian/Ubuntu."
+                return True, "Brave instalado com sucesso."
+
+            return False, f"Navegador desconhecido: {browser}"
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def set_default_browser(browser: str):
+        browser = (browser or "").strip().lower()
+        candidates = {
+            "firefox": "firefox.desktop",
+            "chromium": "chromium-browser.desktop",
+            "brave": "brave-browser.desktop",
+        }
+        desktop = candidates.get(browser)
+        if not desktop:
+            return False, "Navegador invalido para definir padrao."
+
+        # Para servidor sem sessão desktop ativa, tentamos update-alternatives.
+        if shutil.which("xdg-settings"):
+            result = subprocess.run(
+                ["xdg-settings", "set", "default-web-browser", desktop],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                return True, f"Navegador padrao definido: {browser}"
+
+        if shutil.which("update-alternatives"):
+            binary = "firefox" if browser == "firefox" else ("chromium-browser" if browser == "chromium" else "brave-browser")
+            result = subprocess.run(
+                ["update-alternatives", "--set", "x-www-browser", f"/usr/bin/{binary}"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                return True, f"Navegador padrao definido: {browser}"
+
+        return False, "Nao foi possivel definir navegador padrao automaticamente."

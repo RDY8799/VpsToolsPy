@@ -767,6 +767,7 @@ class VPSToolsApp:
                 "12": self.lang.t("tools.domain_audit", "DOMAIN AUDIT"),
                 "13": self._txt("GERENCIAR OPENCLAW", "MANAGE OPENCLAW"),
                 "14": self._txt("GERENCIAR VNC", "MANAGE VNC"),
+                "15": self._txt("INSTALAR NAVEGADOR", "INSTALL BROWSER"),
                 "00": self.lang.t("menu.back", "VOLTAR"),
             }
             self.ui.draw_menu(options, self.lang.t("tools.title", "FERRAMENTAS"))
@@ -890,11 +891,47 @@ class VPSToolsApp:
                 self.openclaw_menu()
             elif option == "14":
                 self.vnc_menu()
+            elif option == "15":
+                self.browser_menu()
             elif option == "00":
                 break
             else:
                 self.ui.print_error(self.lang.t("menu.invalid", "Opcao invalida!"))
                 time.sleep(2)
+
+    def browser_menu(self):
+        while True:
+            self.ui.clear()
+            options = {
+                "01": "FIREFOX",
+                "02": "CHROMIUM",
+                "03": "BRAVE",
+                "00": self.lang.t("menu.back", "VOLTAR"),
+            }
+            self.ui.draw_menu(options, self._txt("INSTALAR NAVEGADOR", "INSTALL BROWSER"))
+            option = self._normalize_option(self.ui.prompt())
+
+            mapping = {"1": "firefox", "2": "chromium", "3": "brave"}
+            if option == "00":
+                break
+            browser = mapping.get(option)
+            if not browser:
+                self.ui.print_error(self.lang.t("menu.invalid", "Opcao invalida!"))
+                time.sleep(1)
+                continue
+
+            if not self._confirm(f"instalacao do navegador {browser}"):
+                continue
+            self.ui.show_spinner(self._txt(f"Instalando {browser}", f"Installing {browser}"))
+            ok, msg = self.sys_actions.install_browser(browser)
+            if ok:
+                self.ui.print_success(msg)
+                if self._confirm(f"definir {browser} como navegador padrao"):
+                    ok_def, msg_def = self.sys_actions.set_default_browser(browser)
+                    self.ui.print_success(msg_def) if ok_def else self.ui.print_error(msg_def)
+            else:
+                self.ui.print_error(msg)
+            time.sleep(2)
 
     def vnc_menu(self):
         service = self.services["VNC"]
