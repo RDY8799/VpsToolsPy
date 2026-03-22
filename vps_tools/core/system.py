@@ -374,6 +374,19 @@ class SystemActions:
         return subprocess.run([*cmd, "-f", compose_file, *args], capture_output=capture_output, text=text, check=False)
 
     @staticmethod
+    def _web_db_panel_service_order(compose_file: str) -> list[str]:
+        services = []
+        try:
+            with open(compose_file, "r", encoding="utf-8") as f:
+                content = f.read()
+            for name in ("adminer", "pgadmin", "redisinsight", "dbpanel"):
+                if re.search(rf"(?m)^  {re.escape(name)}:\s*$", content):
+                    services.append(name)
+        except Exception:
+            return []
+        return services
+
+    @staticmethod
     def _web_db_panel_compose_content(
         panel_port: int,
         app_dir: str,
@@ -423,26 +436,12 @@ class SystemActions:
                 "      - \"host.docker.internal:host-gateway\"\n"
             )
 
-        depends_on = []
-        if enable_adminer:
-            depends_on.append("adminer")
-        if enable_pgadmin:
-            depends_on.append("pgadmin")
-        if enable_redisinsight:
-            depends_on.append("redisinsight")
-
-        depends_block = ""
-        if depends_on:
-            depends_lines = "\n".join(f"      - {name}" for name in depends_on)
-            depends_block = f"    depends_on:\n{depends_lines}\n"
-
         nginx_service = (
             "  dbpanel:\n"
             "    image: nginx:alpine\n"
             "    restart: unless-stopped\n"
             "    ports:\n"
             f"      - \"127.0.0.1:{panel_port}:80\"\n"
-            f"{depends_block}"
             "    volumes:\n"
             "      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro\n"
             "      - ./dashboard:/usr/share/nginx/html:ro\n"
@@ -2156,6 +2155,7 @@ class SystemActions:
                     SystemActions._txt("nao abra a porta do painel para toda a internet", "do not expose the panel port to the entire internet"),
                     SystemActions._txt("foi aplicado ip-forward-no-drop=true no Docker para evitar FORWARD DROP automatico", "ip-forward-no-drop=true was applied in Docker to avoid automatic FORWARD DROP"),
                     SystemActions._txt("o Docker foi mantido parado ao final da instalacao para reduzir risco de queda na VPS", "Docker was kept stopped at the end of the installation to reduce VPS outage risk"),
+                    SystemActions._txt("ao iniciar o painel, os containers sobem em sequencia para reduzir pico de memoria", "when starting the panel, containers are started sequentially to reduce memory spikes"),
                 ],
             }
         except Exception as exc:
@@ -2199,13 +2199,58 @@ class SystemActions:
                 subprocess.run(["iptables", "-P", "FORWARD", "ACCEPT"], capture_output=True, text=True, check=False)
 
             if action == "status":
+                docker_state = subprocess.run(["systemctl", "is-active", "docker"], capture_output=True, text=True, check=False)
+                if docker_state.returncode != 0 or docker_state.stdout.strip() != "active":
+                    status = SystemActions.web_db_panel_status(app_dir=app_dir)
+                    output = SystemActions._txt(
+                        "Painel preparado, mas o Docker esta parado.\nUse a opcao 1 para iniciar o painel com seguranca.",
+                        "Panel is prepared, but Docker is stopped.\nUse option 1 to start the panel safely.",
+                    )
+                    if status.get("panel_port"):
+                        output += f"\n\nPorta local: {status['panel_port']}"
+                    return True, output
                 result = SystemActions._docker_compose_run(compose_file, ["ps"], capture_output=True, text=True)
             elif action == "start":
-                result = SystemActions._docker_compose_run(compose_file, ["up", "-d"], capture_output=True, text=True)
+                for service in SystemActions._web_db_panel_service_order(compose_file):
+                    result = SystemActions._docker_compose_run(compose_file, ["up", "-d", service], capture_output=True, text=True)
+                    if result is None:
+                        return False, SystemActions._txt(
+                            "Docker Compose nao encontrado.",
+                            "Docker Compose not found.",
+                        )
+                    if result.returncode != 0:
+                        return False, (result.stderr or result.stdout or "").strip() or SystemActions._txt(
+                            f"Falha ao iniciar o servico {service} do painel.",
+                            f"Failed to start panel service {service}.",
+                        )
+                result = SystemActions._docker_compose_run(compose_file, ["ps"], capture_output=True, text=True)
             elif action == "stop":
                 result = SystemActions._docker_compose_run(compose_file, ["stop"], capture_output=True, text=True)
             elif action == "restart":
-                result = SystemActions._docker_compose_run(compose_file, ["restart"], capture_output=True, text=True)
+                stop_result = SystemActions._docker_compose_run(compose_file, ["stop"], capture_output=True, text=True)
+                if stop_result is None:
+                    return False, SystemActions._txt(
+                        "Docker Compose nao encontrado.",
+                        "Docker Compose not found.",
+                    )
+                if stop_result.returncode != 0:
+                    return False, (stop_result.stderr or stop_result.stdout or "").strip() or SystemActions._txt(
+                        "Falha ao parar o painel antes do restart.",
+                        "Failed to stop the panel before restart.",
+                    )
+                for service in SystemActions._web_db_panel_service_order(compose_file):
+                    result = SystemActions._docker_compose_run(compose_file, ["up", "-d", service], capture_output=True, text=True)
+                    if result is None:
+                        return False, SystemActions._txt(
+                            "Docker Compose nao encontrado.",
+                            "Docker Compose not found.",
+                        )
+                    if result.returncode != 0:
+                        return False, (result.stderr or result.stdout or "").strip() or SystemActions._txt(
+                            f"Falha ao reiniciar o servico {service} do painel.",
+                            f"Failed to restart panel service {service}.",
+                        )
+                result = SystemActions._docker_compose_run(compose_file, ["ps"], capture_output=True, text=True)
             else:
                 result = SystemActions._docker_compose_run(compose_file, ["down"], capture_output=True, text=True)
                 if result is not None and result.returncode == 0 and remove_files and os.path.isdir(app_dir):

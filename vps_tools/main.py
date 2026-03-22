@@ -762,11 +762,27 @@ class VPSToolsApp:
             )
         )
 
+        ram_total_mb = self.sys_info.get_ram_info().get("total", 0)
+        low_ram = ram_total_mb and ram_total_mb <= 2048
+        if low_ram:
+            self.ui.console.print(
+                Panel(
+                    self._txt(
+                        f"Memoria detectada: cerca de {ram_total_mb} MB. Em VPS pequena, o recomendado e iniciar com Adminer apenas.\n"
+                        "pgAdmin 4 e Redis Insight ficam desativados por padrao para reduzir risco de travamento.",
+                        f"Detected memory: about {ram_total_mb} MB. On a small VPS, the recommended starting point is Adminer only.\n"
+                        "pgAdmin 4 and Redis Insight are disabled by default to reduce the risk of lockups.",
+                    ),
+                    title=self._txt("MODO LEVE RECOMENDADO", "LIGHT MODE RECOMMENDED"),
+                    border_style="yellow",
+                )
+            )
+
         app_dir = self._prompt_default("Diretorio do painel", "Panel directory", "/opt/vps-tools-db-panel")
         panel_port = self._prompt_int_default("Porta local do painel web", "Local web panel port", 18090)
         enable_adminer = self._prompt_bool_default("Ativar Adminer", "Enable Adminer", True)
-        enable_pgadmin = self._prompt_bool_default("Ativar pgAdmin 4", "Enable pgAdmin 4", True)
-        enable_redisinsight = self._prompt_bool_default("Ativar Redis Insight", "Enable Redis Insight", True)
+        enable_pgadmin = self._prompt_bool_default("Ativar pgAdmin 4", "Enable pgAdmin 4", not low_ram)
+        enable_redisinsight = self._prompt_bool_default("Ativar Redis Insight", "Enable Redis Insight", False)
         pgadmin_email = self._prompt_default("E-mail inicial do pgAdmin", "Initial pgAdmin email", "admin@localhost") if enable_pgadmin else ""
         pgadmin_password = self._prompt_default("Senha inicial do pgAdmin (vazio = gerar)", "Initial pgAdmin password (empty = generate)", "") if enable_pgadmin else ""
 
