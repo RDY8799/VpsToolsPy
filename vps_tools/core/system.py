@@ -188,6 +188,9 @@ class SystemActions:
         db_name: str = "hospital",
         db_user: str = "hospital_app",
         db_password: str = "TroquePorUmaSenhaForte123!",
+        listen_addresses: str = "localhost",
+        jdbc_host: str = "127.0.0.1",
+        jdbc_port: int = 5432,
         progress_callback=None,
     ):
         def update(percent: int, text: str):
@@ -209,6 +212,12 @@ class SystemActions:
                 return False, msg
             if not db_password:
                 return False, "Senha do usuario do banco nao pode ser vazia."
+            if not (listen_addresses or "").strip():
+                return False, "listen_addresses nao pode ser vazio."
+            if not (jdbc_host or "").strip():
+                return False, "Host JDBC nao pode ser vazio."
+            if not isinstance(jdbc_port, int) or not (1 <= jdbc_port <= 65535):
+                return False, "Porta JDBC invalida."
 
             update(5, "Atualizando cache de pacotes")
             result = subprocess.run(["apt-get", "update", "-y"], capture_output=True, text=True, check=False)
@@ -231,11 +240,12 @@ class SystemActions:
                 if result.returncode != 0:
                     return False, result.stderr.strip() or result.stdout.strip() or f"Falha ao executar: {' '.join(cmd)}"
 
-            update(55, "Forcando PostgreSQL em localhost")
+            update(55, "Aplicando listen_addresses do PostgreSQL")
             conf_path = SystemActions._find_postgresql_conf()
             if not conf_path:
                 return False, "Arquivo postgresql.conf nao encontrado em /etc/postgresql."
-            ok, msg = SystemActions._replace_or_append_setting(conf_path, "listen_addresses", "'localhost'")
+            pg_listen_addresses = listen_addresses.replace("'", "''")
+            ok, msg = SystemActions._replace_or_append_setting(conf_path, "listen_addresses", f"'{pg_listen_addresses}'")
             if not ok:
                 return False, msg
 
@@ -311,7 +321,10 @@ class SystemActions:
                 "db_name": db_name,
                 "db_user": db_user,
                 "db_password": db_password,
-                "jdbc_url": f"jdbc:postgresql://127.0.0.1:5432/{db_name}",
+                "listen_addresses": listen_addresses,
+                "jdbc_host": jdbc_host,
+                "jdbc_port": jdbc_port,
+                "jdbc_url": f"jdbc:postgresql://{jdbc_host}:{jdbc_port}/{db_name}",
                 "os_info": SystemInfo.get_os_info(),
                 "is_ubuntu": os_release.get("ID", "").lower() == "ubuntu",
                 "service_status": (status_result.stdout or status_result.stderr or "").strip(),
@@ -327,12 +340,15 @@ class SystemActions:
         owner_user: str = "ubuntu",
         repo_url: str = "",
         repo_dir: str = "/opt/celiora-src",
+        jar_name: str = "app.jar",
+        app_port: int = 8080,
         datasource_url: str = "jdbc:postgresql://127.0.0.1:5432/hospital",
         datasource_username: str = "hospital_app",
         datasource_password: str = "@123@Rdy",
         root_owner_email: str = "rdysoftware@gmail.com",
         allowed_origin_patterns: str = "http://localhost:5173,http://127.0.0.1:5173",
         jwt_secret: str = "troque-por-uma-chave-bem-forte-com-32-ou-mais-caracteres",
+        trust_forward_headers: bool = False,
         progress_callback=None,
     ):
         def update(percent: int, text: str):
@@ -351,6 +367,10 @@ class SystemActions:
                 return False, "Diretorio da aplicacao deve ser absoluto."
             if repo_url and not repo_dir.startswith("/"):
                 return False, "Diretorio do repositorio deve ser absoluto."
+            if not jar_name or "/" in jar_name or "\\" in jar_name:
+                return False, "Nome do JAR invalido."
+            if not isinstance(app_port, int) or not (1 <= app_port <= 65535):
+                return False, "Porta da aplicacao invalida."
 
             app_owner = SystemActions._resolve_linux_owner(owner_user)
 
@@ -410,21 +430,21 @@ class SystemActions:
             if java_result.returncode != 0:
                 return False, java_version or "Falha ao validar java -version."
 
-            jar_target = f"{app_dir}/app.jar"
+            jar_target = os.path.join(app_dir, jar_name).replace("\\", "/")
             env_exports = "\n".join(
                 [
-                    "export PORT=8080",
+                    f"export PORT={app_port}",
                     f"export APP_JWT_SECRET='{jwt_secret}'",
                     f"export ROOT_OWNER_EMAIL='{root_owner_email}'",
                     f"export SPRING_DATASOURCE_URL='{datasource_url}'",
                     f"export SPRING_DATASOURCE_USERNAME='{datasource_username}'",
                     f"export SPRING_DATASOURCE_PASSWORD='{datasource_password}'",
-                    "export APP_TRUST_FORWARD_HEADERS='false'",
+                    f"export APP_TRUST_FORWARD_HEADERS='{'true' if trust_forward_headers else 'false'}'",
                     f"export APP_ALLOWED_ORIGIN_PATTERNS='{allowed_origin_patterns}'",
                 ]
             )
             jar_run_command = f"{env_exports}\n\njava -jar {jar_target}"
-            health_check_command = "curl http://127.0.0.1:8080/actuator/health"
+            health_check_command = f"curl http://127.0.0.1:{app_port}/actuator/health"
             build_commands = (
                 f"cd {repo_dir}\n"
                 "./gradlew bootJar\n"
@@ -441,7 +461,9 @@ class SystemActions:
                 "repo_url": repo_url,
                 "repo_dir": repo_dir,
                 "repo_status": repo_status,
+                "jar_name": jar_name,
                 "jar_target": jar_target,
+                "app_port": app_port,
                 "java_version": java_version,
                 "env_exports": env_exports,
                 "jar_run_command": jar_run_command,
@@ -449,7 +471,7 @@ class SystemActions:
                 "health_check_command": health_check_command,
                 "security_group_notes": [
                     "continue com 22 so para seu IP",
-                    "abra 8080 temporariamente so para seu IP, se quiser testar no navegador",
+                    f"abra {app_port} temporariamente so para seu IP, se quiser testar no navegador",
                     "nao abra 5432",
                     "nao abra 80/443 ate concluir a instalacao do backend",
                 ],

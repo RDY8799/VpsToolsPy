@@ -72,7 +72,67 @@ class VPSToolsApp:
     def _txt(self, pt: str, en: str) -> str:
         return en if self.lang.current_lang == "en" else pt
 
-    def _confirm(self, action: str) -> bool:
+    def _confirm_default_yes(self, action: str) -> bool:
+        action_lc = (action or "").strip().lower()
+        no_keywords = {
+            "exclusao",
+            "delete",
+            "desinstalacao",
+            "uninstall",
+            "reinicio do servidor",
+            "server reboot",
+            "restauracao",
+            "restore",
+            "rollback",
+            "revogacao",
+            "revoke",
+            "remocao",
+            "remove",
+            "desconexao",
+            "disconnect",
+            "alteracao de senha",
+            "password change",
+            "alteracao de porta",
+            "port change",
+            "aplicacao de perfil de firewall",
+            "firewall profile apply",
+        }
+        yes_keywords = {
+            "criacao",
+            "create",
+            "instalacao",
+            "installation",
+            "inicio do servico",
+            "service start",
+            "reinicio do servico",
+            "service restart",
+            "atualizacao",
+            "update",
+            "limpeza",
+            "cleanup",
+            "teste",
+            "test",
+            "adicao",
+            "add",
+            "salvar logs",
+            "save logs",
+            "setup wizard",
+            "preparo",
+            "prepare",
+            "definir ",
+            "set ",
+            "configuracao de desktop",
+            "desktop configuration",
+            "snapshot",
+        }
+
+        if any(keyword in action_lc for keyword in no_keywords):
+            return False
+        if any(keyword in action_lc for keyword in yes_keywords):
+            return True
+        return False
+
+    def _confirm(self, action: str, default_yes: bool | None = None) -> bool:
         if self.lang.current_lang == "en":
             action_map = {
                 "criacao de usuario": "user creation",
@@ -122,9 +182,14 @@ class VPSToolsApp:
                 if action == k or action.startswith(k + " "):
                     action = action.replace(k, v, 1)
                     break
+        if default_yes is None:
+            default_yes = self._confirm_default_yes(action)
+        suffix = "(Y/n):" if self.lang.current_lang == "en" and default_yes else "(y/N):" if self.lang.current_lang == "en" else "(S/n):" if default_yes else "(s/N):"
         answer = self.ui.prompt(
-            f"{self.lang.t('confirm.prefix', 'Confirm')} {action}? {self.lang.t('confirm.suffix', '(s/n):')}"
+            f"{self.lang.t('confirm.prefix', 'Confirm')} {action}? {suffix}"
         ).strip().lower()
+        if not answer:
+            return default_yes
         return answer in {"s", "y", "yes", "sim"}
 
     def _ask_port(self, prompt: str, default_port: int):
@@ -215,6 +280,213 @@ class VPSToolsApp:
             return None
         return username.strip()
 
+    def _prompt_default(self, prompt_pt: str, prompt_en: str, default: str = "") -> str:
+        label = self._txt(prompt_pt, prompt_en)
+        if default:
+            label = f"{label} ({self._txt('padrao', 'default')} {default})"
+        return self.ui.prompt(f"{label}: ").strip() or default
+
+    def _prompt_int_default(self, prompt_pt: str, prompt_en: str, default: int) -> int:
+        while True:
+            raw = self._prompt_default(prompt_pt, prompt_en, str(default)).strip()
+            try:
+                value = int(raw)
+            except ValueError:
+                self.ui.print_error(self._txt("Valor numerico invalido.", "Invalid numeric value."))
+                continue
+            if 1 <= value <= 65535:
+                return value
+            self.ui.print_error(self._txt("Valor fora do intervalo permitido.", "Value outside the allowed range."))
+
+    def _prompt_bool_default(self, prompt_pt: str, prompt_en: str, default: bool) -> bool:
+        suffix = self._txt("(S/n)", "(Y/n)") if default else self._txt("(s/N)", "(y/N)")
+        while True:
+            answer = self.ui.prompt(f"{self._txt(prompt_pt, prompt_en)} {suffix}: ").strip().lower()
+            if not answer:
+                return default
+            if answer in {"s", "sim", "y", "yes"}:
+                return True
+            if answer in {"n", "nao", "não", "no"}:
+                return False
+            self.ui.print_error(self._txt("Resposta invalida.", "Invalid answer."))
+
+    def _postgres_setup_flow(self):
+        if not self._confirm("criacao de banco de dados postgresql local"):
+            return
+
+        db_name = self._prompt_default("Nome do banco", "Database name", "hospital")
+        db_user = self._prompt_default("Usuario do banco", "Database user", "hospital_app")
+        db_password = self._prompt_default("Senha do usuario", "User password", "TroquePorUmaSenhaForte123!")
+        listen_addresses = self._prompt_default("Bind do PostgreSQL", "PostgreSQL bind", "localhost")
+        jdbc_host = self._prompt_default("Host JDBC para o backend", "JDBC host for backend", "127.0.0.1")
+        jdbc_port = self._prompt_int_default("Porta JDBC para o backend", "JDBC port for backend", 5432)
+
+        self.ui.print_info(
+            self._txt(
+                "Instalando PostgreSQL e aplicando as configuracoes informadas sem mexer automaticamente no Security Group.",
+                "Installing PostgreSQL and applying the provided settings without automatically changing the Security Group.",
+            )
+        )
+
+        def worker(update):
+            return self.sys_actions.install_local_postgresql(
+                db_name=db_name,
+                db_user=db_user,
+                db_password=db_password,
+                listen_addresses=listen_addresses,
+                jdbc_host=jdbc_host,
+                jdbc_port=jdbc_port,
+                progress_callback=update,
+            )
+
+        ok, data = self.ui.run_animated_task(self._txt("Provisionando PostgreSQL", "Provisioning PostgreSQL"), worker)
+        if ok:
+            summary = (
+                f"[white]{self._txt('Sistema detectado', 'Detected system')}:[/white] [cyan]{data['os_info']}[/cyan]\n"
+                f"[white]Ubuntu:[/white] [cyan]{'sim' if data['is_ubuntu'] else 'nao'}[/cyan]\n"
+                f"[white]{self._txt('Banco', 'Database')}:[/white] [cyan]{data['db_name']}[/cyan]\n"
+                f"[white]{self._txt('Usuario', 'User')}:[/white] [cyan]{data['db_user']}[/cyan]\n"
+                f"[white]listen_addresses:[/white] [cyan]{data['listen_addresses']}[/cyan]\n"
+                f"[white]SPRING_DATASOURCE_URL:[/white] [cyan]{data['jdbc_url']}[/cyan]\n"
+                f"[white]SPRING_DATASOURCE_USERNAME:[/white] [cyan]{data['db_user']}[/cyan]\n"
+                f"[white]SPRING_DATASOURCE_PASSWORD:[/white] [cyan]{data['db_password']}[/cyan]\n"
+                f"[white]{self._txt('Arquivo de configuracao', 'Config file')}:[/white] [cyan]{data['config_file']}[/cyan]\n\n"
+                f"[white]systemctl status postgresql[/white]\n{data['service_status'][-2500:]}\n\n"
+                f"[white]psql -d {data['db_name']} -c \"\\\\l\"[/white]\n{data['psql_test_output'][-2500:]}"
+            )
+            self.ui.console.print(
+                Panel(
+                    summary,
+                    title=self._txt("POSTGRESQL CONFIGURADO", "POSTGRESQL CONFIGURED"),
+                    border_style="green",
+                )
+            )
+        else:
+            self.ui.print_error(data)
+        self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+
+    def _spring_backend_setup_flow(self):
+        if not self._confirm("preparo do backend spring boot"):
+            return
+
+        detected_host = self.sys_info.get_ip()
+        ssh_user = self._prompt_default("Usuario SSH/SCP da maquina", "Machine SSH/SCP user", "ubuntu")
+        ec2_host = self._prompt_default("IP/host da EC2 para instrucoes SCP", "EC2 IP/host for SCP instructions", detected_host)
+        app_dir = self._prompt_default("Diretorio da aplicacao", "Application directory", "/opt/celiora")
+        owner_user = self._prompt_default("Usuario dono da aplicacao", "Application owner user", "ubuntu")
+        jar_name = self._prompt_default("Nome do arquivo JAR destino", "Destination JAR filename", "app.jar")
+        app_port = self._prompt_int_default("Porta da aplicacao", "Application port", 8080)
+        repo_url = self._prompt_default("URL do repositorio Git (vazio = JAR via SCP)", "Git repository URL (empty = JAR via SCP)", "")
+        repo_dir = self._prompt_default("Diretorio do repositorio na EC2", "Repository directory on EC2", "/opt/celiora-src") if repo_url else "/opt/celiora-src"
+        jwt_secret = self._prompt_default(
+            "APP_JWT_SECRET",
+            "APP_JWT_SECRET",
+            "troque-por-uma-chave-bem-forte-com-32-ou-mais-caracteres",
+        )
+        root_owner_email = self._prompt_default("ROOT_OWNER_EMAIL", "ROOT_OWNER_EMAIL", "rdysoftware@gmail.com")
+        datasource_url = self._prompt_default("SPRING_DATASOURCE_URL", "SPRING_DATASOURCE_URL", "jdbc:postgresql://127.0.0.1:5432/hospital")
+        datasource_username = self._prompt_default("SPRING_DATASOURCE_USERNAME", "SPRING_DATASOURCE_USERNAME", "hospital_app")
+        datasource_password = self._prompt_default("SPRING_DATASOURCE_PASSWORD", "SPRING_DATASOURCE_PASSWORD", "@123@Rdy")
+        trust_forward_headers = self._prompt_bool_default("APP_TRUST_FORWARD_HEADERS", "APP_TRUST_FORWARD_HEADERS", False)
+        allowed_origin_patterns = self._prompt_default(
+            "APP_ALLOWED_ORIGIN_PATTERNS",
+            "APP_ALLOWED_ORIGIN_PATTERNS",
+            "http://localhost:5173,http://127.0.0.1:5173",
+        )
+
+        self.ui.print_info(
+            self._txt(
+                "Preparando Java 17 e o ambiente do backend com os parametros informados.",
+                "Preparing Java 17 and the backend environment with the provided parameters.",
+            )
+        )
+
+        def worker(update):
+            return self.sys_actions.prepare_spring_backend_runtime(
+                app_dir=app_dir,
+                owner_user=owner_user,
+                repo_url=repo_url,
+                repo_dir=repo_dir,
+                jar_name=jar_name,
+                app_port=app_port,
+                datasource_url=datasource_url,
+                datasource_username=datasource_username,
+                datasource_password=datasource_password,
+                root_owner_email=root_owner_email,
+                allowed_origin_patterns=allowed_origin_patterns,
+                jwt_secret=jwt_secret,
+                trust_forward_headers=trust_forward_headers,
+                progress_callback=update,
+            )
+
+        ok, data = self.ui.run_animated_task(
+            self._txt("Preparando backend Spring Boot", "Preparing Spring Boot backend"),
+            worker,
+        )
+        if ok:
+            jar_steps = (
+                ".\\gradlew.bat bootJar\n"
+                f"scp -i \"CAMINHO_DA_SUA_CHAVE.pem\" .\\build\\libs\\celiora-health-0.0.1-SNAPSHOT.jar {ssh_user}@{ec2_host}:{data['jar_target']}"
+            )
+            repo_steps = f"git clone {data['repo_url']} {data['repo_dir']}" if data["repo_url"] else self._txt(
+                "Nao informado. Use o caminho via JAR abaixo.",
+                "Not provided. Use the JAR path below.",
+            )
+            security_notes = "\n".join(f"- {note}" for note in data["security_group_notes"])
+            summary = (
+                f"[white]{self._txt('Sistema detectado', 'Detected system')}:[/white] [cyan]{data['os_info']}[/cyan]\n"
+                f"[white]Ubuntu:[/white] [cyan]{'sim' if data['is_ubuntu'] else 'nao'}[/cyan]\n"
+                f"[white]java -version:[/white]\n{data['java_version']}\n\n"
+                f"[white]{self._txt('Diretorio da aplicacao', 'Application directory')}:[/white] [cyan]{data['app_dir']}[/cyan]\n"
+                f"[white]{self._txt('Dono configurado', 'Configured owner')}:[/white] [cyan]{data['app_owner']}[/cyan]\n"
+                f"[white]{self._txt('Porta da aplicacao', 'Application port')}:[/white] [cyan]{data['app_port']}[/cyan]\n"
+                f"[white]JAR destino:[/white] [cyan]{data['jar_target']}[/cyan]\n"
+            )
+            if data["repo_url"]:
+                summary += (
+                    f"[white]Repositorio:[/white] [cyan]{data['repo_url']}[/cyan]\n"
+                    f"[white]Status git:[/white]\n{data['repo_status'][-1200:]}\n\n"
+                )
+            summary += (
+                f"[white]1. Git clone na EC2[/white]\n{repo_steps}\n\n"
+                f"[white]2. Build no seu PC + SCP[/white]\n{jar_steps}\n\n"
+                f"[white]3. Exportar variaveis e subir o backend[/white]\n{data['jar_run_command']}\n\n"
+                f"[white]4. Teste local na EC2[/white]\n{data['health_check_command']}\n\n"
+                f"[white]5. Build direto na EC2[/white]\n{data['build_commands'] or self._txt('Informe a URL do repositorio para usar este caminho.', 'Provide the repository URL to use this path.')}\n\n"
+                f"[white]Security Group[/white]\n{security_notes}"
+            )
+            self.ui.console.print(
+                Panel(
+                    summary,
+                    title=self._txt("BACKEND SPRING PREPARADO", "SPRING BACKEND PREPARED"),
+                    border_style="green",
+                )
+            )
+        else:
+            self.ui.print_error(data)
+        self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+
+    def database_backend_menu(self):
+        while True:
+            self.ui.clear()
+            options = {
+                "01": self._txt("CRIAR BANCO POSTGRESQL LOCAL", "CREATE LOCAL POSTGRESQL DATABASE"),
+                "02": self._txt("PREPARAR BACKEND SPRING BOOT", "PREPARE SPRING BOOT BACKEND"),
+                "00": self.lang.t("menu.back", "VOLTAR"),
+            }
+            self.ui.draw_menu(options, self._txt("BANCO DE DADOS / BACKEND", "DATABASE / BACKEND"))
+            option = self._normalize_option(self.ui.prompt())
+
+            if option == "1":
+                self._postgres_setup_flow()
+            elif option == "2":
+                self._spring_backend_setup_flow()
+            elif option == "00":
+                break
+            else:
+                self.ui.print_error(self.lang.t("menu.invalid", "Opcao invalida!"))
+                time.sleep(2)
+
     def main_menu(self):
         while True:
             self.ui.clear()
@@ -231,7 +503,8 @@ class VPSToolsApp:
                 "01": self.lang.t("main.install", "INSTALADOR/CONFIGURAR SERVICOS"),
                 "02": self.lang.t("main.users", "GERENCIAMENTO DE USUARIOS"),
                 "03": self.lang.t("main.tools", "FERRAMENTAS DO SISTEMA"),
-                "04": self.lang.t("main.about", "SOBRE"),
+                "04": self._txt("BANCO DE DADOS / BACKEND", "DATABASE / BACKEND"),
+                "05": self.lang.t("main.about", "SOBRE"),
                 "00": self.lang.t("main.exit", "SAIR"),
             }
             self.ui.draw_menu(options)
@@ -245,6 +518,8 @@ class VPSToolsApp:
             elif option == "3":
                 self.tools_menu()
             elif option == "4":
+                self.database_backend_menu()
+            elif option == "5":
                 self.about()
             elif option == "00":
                 sys.exit(0)
@@ -770,8 +1045,6 @@ class VPSToolsApp:
                 "13": self._txt("GERENCIAR OPENCLAW", "MANAGE OPENCLAW"),
                 "14": self._txt("GERENCIAR VNC", "MANAGE VNC"),
                 "15": self._txt("INSTALAR NAVEGADOR", "INSTALL BROWSER"),
-                "16": self._txt("CRIAR BANCO POSTGRESQL LOCAL", "CREATE LOCAL POSTGRESQL DATABASE"),
-                "17": self._txt("PREPARAR BACKEND SPRING BOOT", "PREPARE SPRING BOOT BACKEND"),
                 "00": self.lang.t("menu.back", "VOLTAR"),
             }
             self.ui.draw_menu(options, self.lang.t("tools.title", "FERRAMENTAS"))
@@ -897,144 +1170,6 @@ class VPSToolsApp:
                 self.vnc_menu()
             elif option == "15":
                 self.browser_menu()
-            elif option == "16":
-                if not self._confirm("criacao de banco de dados postgresql local"):
-                    continue
-
-                db_name = self.ui.prompt(self._txt("Nome do banco (padrao hospital): ", "Database name (default hospital): ")).strip() or "hospital"
-                db_user = self.ui.prompt(self._txt("Usuario do banco (padrao hospital_app): ", "Database user (default hospital_app): ")).strip() or "hospital_app"
-                db_password = self.ui.prompt(
-                    self._txt(
-                        "Senha do usuario (padrao TroquePorUmaSenhaForte123!): ",
-                        "User password (default TroquePorUmaSenhaForte123!): ",
-                    )
-                ).strip() or "TroquePorUmaSenhaForte123!"
-
-                self.ui.print_info(
-                    self._txt(
-                        "Instalando PostgreSQL local sem abrir 5432/80/443 e mantendo bind apenas em localhost.",
-                        "Installing local PostgreSQL without opening 5432/80/443 and keeping bind only on localhost.",
-                    )
-                )
-
-                def worker(update):
-                    return self.sys_actions.install_local_postgresql(
-                        db_name=db_name,
-                        db_user=db_user,
-                        db_password=db_password,
-                        progress_callback=update,
-                    )
-
-                ok, data = self.ui.run_animated_task(self._txt("Provisionando PostgreSQL", "Provisioning PostgreSQL"), worker)
-                if ok:
-                    summary = (
-                        f"[white]{self._txt('Sistema detectado', 'Detected system')}:[/white] [cyan]{data['os_info']}[/cyan]\n"
-                        f"[white]Ubuntu:[/white] [cyan]{'sim' if data['is_ubuntu'] else 'nao'}[/cyan]\n"
-                        f"[white]{self._txt('Banco', 'Database')}:[/white] [cyan]{data['db_name']}[/cyan]\n"
-                        f"[white]{self._txt('Usuario', 'User')}:[/white] [cyan]{data['db_user']}[/cyan]\n"
-                        f"[white]SPRING_DATASOURCE_URL:[/white] [cyan]{data['jdbc_url']}[/cyan]\n"
-                        f"[white]SPRING_DATASOURCE_USERNAME:[/white] [cyan]{data['db_user']}[/cyan]\n"
-                        f"[white]SPRING_DATASOURCE_PASSWORD:[/white] [cyan]{data['db_password']}[/cyan]\n"
-                        f"[white]{self._txt('Arquivo de configuracao', 'Config file')}:[/white] [cyan]{data['config_file']}[/cyan]\n\n"
-                        f"[white]systemctl status postgresql[/white]\n{data['service_status'][-2500:]}\n\n"
-                        f"[white]psql -d {data['db_name']} -c \"\\\\l\"[/white]\n{data['psql_test_output'][-2500:]}"
-                    )
-                    self.ui.console.print(
-                        Panel(
-                            summary,
-                            title=self._txt("POSTGRESQL CONFIGURADO", "POSTGRESQL CONFIGURED"),
-                            border_style="green",
-                        )
-                    )
-                else:
-                    self.ui.print_error(data)
-                self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
-            elif option == "17":
-                if not self._confirm("preparo do backend spring boot"):
-                    continue
-
-                detected_host = self.sys_info.get_ip()
-                ec2_host = self.ui.prompt(
-                    self._txt(
-                        f"IP/host da EC2 para instrucoes SCP (padrao {detected_host}): ",
-                        f"EC2 IP/host for SCP instructions (default {detected_host}): ",
-                    )
-                ).strip() or detected_host
-                repo_url = self.ui.prompt(
-                    self._txt(
-                        "URL do repositorio Git (vazio para usar JAR via SCP): ",
-                        "Git repository URL (empty to use JAR via SCP): ",
-                    )
-                ).strip()
-                datasource_password = self.ui.prompt(
-                    self._txt(
-                        "Senha do banco usada no backend (padrao @123@Rdy): ",
-                        "Database password used by backend (default @123@Rdy): ",
-                    )
-                ).strip() or "@123@Rdy"
-
-                self.ui.print_info(
-                    self._txt(
-                        "Preparando Java 17 e o diretorio /opt/celiora sem abrir 5432/80/443.",
-                        "Preparing Java 17 and /opt/celiora without opening 5432/80/443.",
-                    )
-                )
-
-                def worker(update):
-                    return self.sys_actions.prepare_spring_backend_runtime(
-                        repo_url=repo_url,
-                        datasource_password=datasource_password,
-                        progress_callback=update,
-                    )
-
-                ok, data = self.ui.run_animated_task(
-                    self._txt("Preparando backend Spring Boot", "Preparing Spring Boot backend"),
-                    worker,
-                )
-                if ok:
-                    jar_steps = (
-                        ".\\gradlew.bat bootJar\n"
-                        f"scp -i \"CAMINHO_DA_SUA_CHAVE.pem\" .\\build\\libs\\celiora-health-0.0.1-SNAPSHOT.jar ubuntu@{ec2_host}:{data['jar_target']}"
-                    )
-                    repo_steps = (
-                        f"cd /opt\n"
-                        f"git clone {data['repo_url']} {os.path.basename(data['repo_dir'])}"
-                    ) if data["repo_url"] else self._txt(
-                        "Nao informado. Use o caminho via JAR abaixo.",
-                        "Not provided. Use the JAR path below.",
-                    )
-                    security_notes = "\n".join(f"- {note}" for note in data["security_group_notes"])
-                    summary = (
-                        f"[white]{self._txt('Sistema detectado', 'Detected system')}:[/white] [cyan]{data['os_info']}[/cyan]\n"
-                        f"[white]Ubuntu:[/white] [cyan]{'sim' if data['is_ubuntu'] else 'nao'}[/cyan]\n"
-                        f"[white]java -version:[/white]\n{data['java_version']}\n\n"
-                        f"[white]{self._txt('Diretorio da aplicacao', 'Application directory')}:[/white] [cyan]{data['app_dir']}[/cyan]\n"
-                        f"[white]{self._txt('Dono configurado', 'Configured owner')}:[/white] [cyan]{data['app_owner']}[/cyan]\n"
-                        f"[white]JAR destino:[/white] [cyan]{data['jar_target']}[/cyan]\n"
-                    )
-                    if data["repo_url"]:
-                        summary += (
-                            f"[white]Repositorio:[/white] [cyan]{data['repo_url']}[/cyan]\n"
-                            f"[white]Status git:[/white]\n{data['repo_status'][-1200:]}\n\n"
-                        )
-                    summary += (
-                        f"[white]1. Git clone na EC2[/white]\n{repo_steps}\n\n"
-                        f"[white]2. Build no seu PC + SCP[/white]\n{jar_steps}\n\n"
-                        f"[white]3. Exportar variaveis e subir o backend[/white]\n{data['jar_run_command']}\n\n"
-                        f"[white]4. Teste local na EC2[/white]\n{data['health_check_command']}\n\n"
-                        f"[white]5. Build direto na EC2[/white]\n{data['build_commands'] or self._txt('Informe a URL do repositorio para usar este caminho.', 'Provide the repository URL to use this path.')}\n\n"
-                        f"[white]Security Group[/white]\n{security_notes}"
-                    )
-                    self.ui.console.print(
-                        Panel(
-                            summary,
-                            title=self._txt("BACKEND SPRING PREPARADO", "SPRING BACKEND PREPARED"),
-                            border_style="green",
-                        )
-                    )
-                else:
-                    self.ui.print_error(data)
-                self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
             elif option == "00":
                 break
             else:
