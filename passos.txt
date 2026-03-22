@@ -11,6 +11,48 @@
   [x] Permitir execucao manual do backup
   [x] Gerar arquivo de status do ultimo backup
   [x] Exibir status do timer e do service
+  [x] Validar a fase 1 no servidor real
+  [x] Medir tempo real de configuracao do job no servidor
+  [x] Medir tempo real da primeira execucao manual no servidor
+  [x] Registrar resultado real da validacao da fase 1
+
+Resultado real da validacao da fase 1 no servidor:
+  [x] Servidor validado: api.dinvendas.com
+  [x] Job de teste criado: hospital-dr-test
+  [x] Banco validado: PostgreSQL hospital
+  [x] Tempo real de configuracao do job: 0.65s
+  [x] Tempo real da primeira execucao manual: 0.48s
+  [x] Timer ativo e aguardando proxima execucao
+  [x] Artefato de backup gerado com sucesso
+  [x] Checksum gerado com sucesso
+  [x] Status do job salvo com sucesso
+  [x] RPO/RTO ainda nao comparados porque o perfil operacional final ainda nao foi fechado
+
+[x] FASE 2 IMPLEMENTADA
+  [x] Criar export de configuracoes da VPS
+  [x] Incluir configuracoes do Nginx
+  [x] Incluir configuracoes do systemd
+  [x] Incluir inventario de portas em escuta
+  [x] Incluir inventario de timers
+  [x] Incluir inventario de unit files
+  [x] Incluir inventario de firewall
+  [x] Incluir inventario de certificados
+  [x] Incluir inventario de dominios / server_names
+  [x] Incluir arquivos .env encontrados em /opt
+  [x] Gerar manifesto do export
+  [x] Compactar export em tar.gz
+  [x] Gerar checksum do export
+  [x] Validar a fase 2 no servidor real
+
+Resultado real da validacao da fase 2 no servidor:
+  [x] Servidor validado: api.dinvendas.com
+  [x] Export de teste executado: dr-config-test
+  [x] Tempo real do export de configuracoes: 2.34s
+  [x] Arquivo gerado com sucesso
+  [x] Checksum do export gerado com sucesso
+  [x] Itens principais exportados: nginx, systemd, passwd, group, hosts, hostname
+  [x] Arquivo de ambiente encontrado e exportado: /opt/celiora/app.env
+  [x] Dominios / server_names inventariados com sucesso
 
 [ ] DEFINIR RPO E RTO
   [x] Criar estrutura para definir RPO por sistema, banco e ambiente
@@ -34,7 +76,7 @@
   [ ] Testar restore automatico
   [x] Medir duracao do backup
   [ ] Medir duracao do restore
-  [ ] Exportar configs da VPS
+  [x] Exportar configs da VPS
   [ ] Checar saude de servicos
   [ ] Monitorar SSL
   [ ] Monitorar dominio
@@ -112,7 +154,6 @@
   [ ] Implementar criptografia de backup
   [ ] Implementar alerta de falha
   [ ] Implementar teste automatico de restore
-  [ ] Implementar export de configuracoes da VPS
   [ ] Implementar monitoramento basico de disco, RAM, CPU e SSL
 
 Observacoes adicionadas pelo usuario:

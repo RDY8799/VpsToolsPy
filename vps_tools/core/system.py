@@ -7,6 +7,7 @@ import shutil
 import socket
 import string
 import subprocess
+import tarfile
 import time
 
 import psutil
@@ -472,6 +473,24 @@ class SystemActions:
                 return json.load(f)
         except Exception:
             return default
+
+    @staticmethod
+    def _copy_path_if_exists(src: str, dst: str):
+        try:
+            if not os.path.exists(src):
+                return True, ""
+            parent = os.path.dirname(dst)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            if os.path.isdir(src):
+                if os.path.exists(dst):
+                    shutil.rmtree(dst, ignore_errors=True)
+                shutil.copytree(src, dst, dirs_exist_ok=True)
+            else:
+                shutil.copy2(src, dst)
+            return True, dst
+        except Exception as exc:
+            return False, str(exc)
 
     @staticmethod
     def _merge_json_file(path: str, updates: dict):
@@ -1566,6 +1585,148 @@ class SystemActions:
                 "timer_status": (timer_status.stdout or timer_status.stderr or "").strip(),
                 "service_status": (service_status.stdout or service_status.stderr or "").strip(),
                 "last_status": last_status if isinstance(last_status, dict) else {},
+            }
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def export_vps_config_snapshot(
+        export_name: str = "vps-config",
+        output_dir: str = "/var/backups/vps-tools/config-exports",
+        include_environment_files: bool = True,
+        include_letsencrypt: bool = False,
+        progress_callback=None,
+    ):
+        def update(percent: int, text: str):
+            if progress_callback:
+                progress_callback(completed=percent, description=f"[cyan]{text}[/cyan]")
+
+        try:
+            if os.name == "nt":
+                return False, SystemActions._txt(
+                    "Export de configuracoes da VPS nao suportado no Windows.",
+                    "VPS configuration export is not supported on Windows.",
+                )
+            safe_name = re.sub(r"[^A-Za-z0-9_-]", "-", export_name or "").strip("-") or "vps-config"
+            if not output_dir.startswith("/"):
+                return False, SystemActions._txt("Diretorio de export deve ser absoluto.", "Export directory must be absolute.")
+
+            timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+            root_dir = os.path.join(output_dir, f"{safe_name}_{timestamp}")
+            staging_dir = os.path.join(root_dir, "staging")
+            os.makedirs(staging_dir, exist_ok=True)
+
+            update(10, SystemActions._txt("Copiando configuracoes principais", "Copying main configurations"))
+            copy_targets = [
+                ("/etc/nginx", os.path.join(staging_dir, "etc", "nginx")),
+                ("/etc/systemd/system", os.path.join(staging_dir, "etc", "systemd", "system")),
+                ("/etc/passwd", os.path.join(staging_dir, "etc", "passwd")),
+                ("/etc/group", os.path.join(staging_dir, "etc", "group")),
+                ("/etc/hosts", os.path.join(staging_dir, "etc", "hosts")),
+                ("/etc/hostname", os.path.join(staging_dir, "etc", "hostname")),
+            ]
+            if include_letsencrypt:
+                copy_targets.append(("/etc/letsencrypt", os.path.join(staging_dir, "etc", "letsencrypt")))
+            copied_items = []
+            for src, dst in copy_targets:
+                ok, msg = SystemActions._copy_path_if_exists(src, dst)
+                if not ok:
+                    return False, msg
+                if msg:
+                    copied_items.append(src)
+
+            update(35, SystemActions._txt("Inventariando ambiente da VPS", "Building VPS inventory"))
+            reports_dir = os.path.join(staging_dir, "reports")
+            os.makedirs(reports_dir, exist_ok=True)
+            commands = {
+                "systemctl-list-unit-files.txt": ["systemctl", "list-unit-files", "--no-pager"],
+                "systemctl-list-timers.txt": ["systemctl", "list-timers", "--all", "--no-pager"],
+                "ss-ltnp.txt": ["ss", "-ltnp"],
+                "iptables-S.txt": ["iptables", "-S"],
+                "ufw-status.txt": ["ufw", "status", "verbose"],
+                "certbot-certificates.txt": ["certbot", "certificates"],
+            }
+            if shutil.which("nft"):
+                commands["nft-list-ruleset.txt"] = ["nft", "list", "ruleset"]
+            if shutil.which("nginx"):
+                commands["nginx-T.txt"] = ["nginx", "-T"]
+            reports = {}
+            for filename, cmd in commands.items():
+                result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                content = (result.stdout or result.stderr or "").strip()
+                ok, msg = SystemActions._write_text_file(os.path.join(reports_dir, filename), content + ("\n" if content else ""))
+                if not ok:
+                    return False, msg
+                reports[filename] = content
+
+            server_names = sorted(set(re.findall(r"(?m)^\s*server_name\s+([^;]+);", reports.get("nginx-T.txt", ""))))
+            ok, msg = SystemActions._write_text_file(
+                os.path.join(reports_dir, "domains-and-server-names.txt"),
+                "\n".join(server_names) + ("\n" if server_names else ""),
+            )
+            if not ok:
+                return False, msg
+
+            update(55, SystemActions._txt("Coletando arquivos de ambiente", "Collecting environment files"))
+            env_paths = []
+            if include_environment_files:
+                env_discovery = subprocess.run(
+                    ["bash", "-lc", "find /opt -maxdepth 4 -type f \\( -name '*.env' -o -name 'app.env' \\) 2>/dev/null | sort"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                env_paths = [line.strip() for line in (env_discovery.stdout or "").splitlines() if line.strip()]
+                env_root = os.path.join(staging_dir, "opt")
+                for path in env_paths:
+                    relative = path.lstrip("/")
+                    ok, msg = SystemActions._copy_path_if_exists(path, os.path.join(staging_dir, relative))
+                    if not ok:
+                        return False, msg
+                ok, msg = SystemActions._write_text_file(
+                    os.path.join(reports_dir, "environment-files.txt"),
+                    "\n".join(env_paths) + ("\n" if env_paths else ""),
+                    mode=0o600,
+                )
+                if not ok:
+                    return False, msg
+
+            update(75, SystemActions._txt("Gerando manifesto do export", "Generating export manifest"))
+            manifest = {
+                "export_name": safe_name,
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "output_dir": output_dir,
+                "include_environment_files": include_environment_files,
+                "include_letsencrypt": include_letsencrypt,
+                "copied_items": copied_items,
+                "environment_files": env_paths,
+                "domain_inventory_count": len(server_names),
+                "report_files": sorted(reports.keys()),
+            }
+            ok, msg = SystemActions._write_json_file(os.path.join(staging_dir, "manifest.json"), manifest, mode=0o600)
+            if not ok:
+                return False, msg
+
+            update(90, SystemActions._txt("Compactando export da VPS", "Compressing VPS export"))
+            archive_path = os.path.join(output_dir, f"{safe_name}_{timestamp}.tar.gz")
+            os.makedirs(output_dir, exist_ok=True)
+            with tarfile.open(archive_path, "w:gz") as tar:
+                tar.add(staging_dir, arcname=os.path.basename(staging_dir))
+            checksum_result = subprocess.run(["sha256sum", archive_path], capture_output=True, text=True, check=False)
+            checksum_path = f"{archive_path}.sha256"
+            ok, msg = SystemActions._write_text_file(checksum_path, (checksum_result.stdout or "").strip() + "\n", mode=0o600)
+            if not ok:
+                return False, msg
+            shutil.rmtree(root_dir, ignore_errors=True)
+
+            update(100, SystemActions._txt("Export de configuracoes concluido", "Configuration export completed"))
+            return True, {
+                "archive_path": archive_path,
+                "checksum_path": checksum_path,
+                "copied_items": copied_items,
+                "environment_files": env_paths,
+                "server_names": server_names,
+                "manifest": manifest,
             }
         except Exception as exc:
             return False, str(exc)

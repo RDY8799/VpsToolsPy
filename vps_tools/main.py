@@ -714,6 +714,45 @@ class VPSToolsApp:
             self.ui.print_error(data)
         self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
 
+    def _dr_export_config_flow(self):
+        if not self._confirm("export de configuracoes da VPS"):
+            return
+        export_name = self._prompt_default("Nome do export", "Export name", "vps-config")
+        output_dir = self._prompt_default("Diretorio de destino", "Destination directory", "/var/backups/vps-tools/config-exports")
+        include_environment_files = self._prompt_bool_default(
+            "Incluir arquivos .env / app.env encontrados em /opt",
+            "Include .env / app.env files found under /opt",
+            True,
+        )
+        include_letsencrypt = self._prompt_bool_default(
+            "Incluir /etc/letsencrypt no pacote",
+            "Include /etc/letsencrypt in the package",
+            False,
+        )
+
+        def worker(update):
+            return self.sys_actions.export_vps_config_snapshot(
+                export_name=export_name,
+                output_dir=output_dir,
+                include_environment_files=include_environment_files,
+                include_letsencrypt=include_letsencrypt,
+                progress_callback=update,
+            )
+
+        ok, data = self.ui.run_animated_task(self._txt("Exportando configuracoes da VPS", "Exporting VPS configuration"), worker)
+        if ok:
+            summary = (
+                f"[white]{self._txt('Arquivo', 'Archive')}:[/white] [cyan]{data['archive_path']}[/cyan]\n"
+                f"[white]{self._txt('Checksum', 'Checksum')}:[/white] [cyan]{data['checksum_path']}[/cyan]\n"
+                f"[white]{self._txt('Itens copiados', 'Copied items')}:[/white] [cyan]{len(data['copied_items'])}[/cyan]\n"
+                f"[white]{self._txt('Arquivos de ambiente', 'Environment files')}:[/white] [cyan]{len(data['environment_files'])}[/cyan]\n"
+                f"[white]{self._txt('Server names', 'Server names')}:[/white] [cyan]{len(data['server_names'])}[/cyan]"
+            )
+            self.ui.console.print(Panel(summary, title=self._txt("EXPORT DE CONFIG CONCLUIDO", "CONFIG EXPORT COMPLETED"), border_style="green"))
+        else:
+            self.ui.print_error(data)
+        self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+
     def _spring_backend_setup_flow(self):
         if not self._confirm("preparo do backend spring boot"):
             return
@@ -1386,6 +1425,7 @@ class VPSToolsApp:
                 "02": self._txt("CONFIGURAR BACKUP LOGICO DE BANCO", "CONFIGURE LOGICAL DATABASE BACKUP"),
                 "03": self._txt("EXECUTAR BACKUP AGORA", "RUN BACKUP NOW"),
                 "04": self._txt("STATUS DO BACKUP", "BACKUP STATUS"),
+                "05": self._txt("EXPORTAR CONFIGURACOES DA VPS", "EXPORT VPS CONFIGURATION"),
                 "00": self.lang.t("menu.back", "VOLTAR"),
             }
             self.ui.draw_menu(options, self._txt("RECUPERACAO / DR", "RECOVERY / DR"))
@@ -1399,6 +1439,8 @@ class VPSToolsApp:
                 self._dr_run_backup_now_flow()
             elif option == "4":
                 self._dr_backup_status_flow()
+            elif option == "5":
+                self._dr_export_config_flow()
             elif option == "00":
                 break
             else:
