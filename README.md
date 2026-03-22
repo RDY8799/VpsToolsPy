@@ -231,9 +231,15 @@ Boas praticas:
 Se quiser uma interface web para administrar os bancos:
 
 1. Entre em `04`
-2. Escolha `INSTALAR PAINEL WEB DE BANCOS`
+2. Escolha `11` `INSTALAR PAINEL WEB DE BANCOS`
 3. Selecione quais ferramentas quer ativar
-4. Informe a porta local do painel
+4. Informe:
+   - diretorio do painel
+   - porta local do painel
+   - se quer `Adminer`
+   - se quer `pgAdmin 4`
+   - se quer `Redis Insight`
+   - e-mail e senha inicial do `pgAdmin`, se ativado
 5. Ao final, abra a URL local mostrada na tela
 
 Esse modulo instala um painel opcional com:
@@ -244,15 +250,48 @@ Esse modulo instala um painel opcional com:
 
 O painel usa Docker e fica preso a `127.0.0.1` por padrao, sem abrir acesso publico automaticamente.
 
+Depois da instalacao, a tela mostra:
+
+- `URL local`
+- `URL remota`
+- login do `pgAdmin`, quando ele estiver ativo
+
+Exemplo de acesso local:
+
+```text
+http://127.0.0.1:18090/
+```
+
+Para gerenciar depois:
+
+1. Entre em `04`
+2. Escolha `12` `GERENCIAR PAINEL WEB DE BANCOS`
+
+Opcoes disponiveis:
+
+- iniciar/atualizar painel
+- parar painel
+- reiniciar painel
+- status do painel
+- desinstalar painel
+- publicar painel via `Nginx + login`
+- ativar `HTTPS` no painel
+
 Se depois quiser publicar o painel com seguranca:
 
-1. Abra `GERENCIAR PAINEL WEB DE BANCOS`
+1. Abra `12` `GERENCIAR PAINEL WEB DE BANCOS`
 2. Escolha `Publicar painel via Nginx + login`
 3. Informe dominio, nome do site e credenciais de acesso
 4. Depois escolha `Ativar HTTPS no painel`
 5. Informe o mesmo dominio e um e-mail valido do Let's Encrypt
 
 Esse fluxo cria um virtual host Nginx com autenticacao basica na frente do painel, e depois permite emitir certificado HTTPS para o dominio informado.
+
+Depois disso, o acesso publicado fica assim:
+
+```text
+https://seu-dominio/
+```
 
 Dentro das ferramentas, para conectar nos bancos da propria maquina, use:
 
