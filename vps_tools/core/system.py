@@ -449,6 +449,31 @@ class SystemActions:
             return False, str(exc)
 
     @staticmethod
+    def _write_json_file(path: str, payload, mode: int | None = None):
+        try:
+            parent = os.path.dirname(path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+                f.write("\n")
+            if mode is not None:
+                os.chmod(path, mode)
+            return True, path
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def _read_json_file(path: str, default=None):
+        if not os.path.exists(path):
+            return default
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return default
+
+    @staticmethod
     def _merge_json_file(path: str, updates: dict):
         data = {}
         if os.path.exists(path):
@@ -503,6 +528,181 @@ class SystemActions:
             safe_key = re.sub(r"[^A-Za-z0-9_]", "_", key or "").upper()
             lines.append(f"{safe_key}={shlex.quote(str(value))}")
         return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def _dr_root_dir() -> str:
+        return "/opt/vps-tools/dr"
+
+    @staticmethod
+    def _dr_profiles_dir() -> str:
+        return os.path.join(SystemActions._dr_root_dir(), "profiles")
+
+    @staticmethod
+    def _dr_jobs_dir() -> str:
+        return os.path.join(SystemActions._dr_root_dir(), "jobs")
+
+    @staticmethod
+    def _dr_backup_job_paths(job_name: str):
+        safe_job = re.sub(r"[^A-Za-z0-9_-]", "-", job_name or "").strip("-")
+        job_dir = os.path.join(SystemActions._dr_jobs_dir(), safe_job)
+        return {
+            "safe_job": safe_job,
+            "job_dir": job_dir,
+            "config_file": os.path.join(job_dir, "job.json"),
+            "status_file": os.path.join(job_dir, "last_status.json"),
+            "env_file": os.path.join(job_dir, "job.env"),
+            "script_file": os.path.join(job_dir, "run-backup.sh"),
+            "service_name": f"vps-tools-db-backup-{safe_job}",
+            "timer_name": f"vps-tools-db-backup-{safe_job}.timer",
+            "service_unit": f"/etc/systemd/system/vps-tools-db-backup-{safe_job}.service",
+            "timer_unit": f"/etc/systemd/system/vps-tools-db-backup-{safe_job}.timer",
+        }
+
+    @staticmethod
+    def _db_backup_script_content(job_name: str, engine: str, output_extension: str, compression_enabled: bool) -> str:
+        compression_value = "1" if compression_enabled else "0"
+        return (
+            "#!/usr/bin/env bash\n"
+            "set -Eeuo pipefail\n"
+            "umask 077\n"
+            "\n"
+            f"JOB_NAME={shlex.quote(job_name)}\n"
+            f"ENGINE={shlex.quote(engine)}\n"
+            f"OUTPUT_EXTENSION={shlex.quote(output_extension)}\n"
+            f"COMPRESSION_ENABLED={compression_value}\n"
+            "\n"
+            'STATUS_FILE="${STATUS_FILE:?STATUS_FILE is required}"\n'
+            'BACKUP_DIR="${BACKUP_DIR:?BACKUP_DIR is required}"\n'
+            'RETENTION_COUNT="${RETENTION_COUNT:-7}"\n'
+            'VERIFY_FREE_MB="${VERIFY_FREE_MB:-512}"\n'
+            'DB_HOST="${DB_HOST:-127.0.0.1}"\n'
+            'DB_PORT="${DB_PORT:-0}"\n'
+            'DB_NAME="${DB_NAME:-}"\n'
+            'DB_USER="${DB_USER:-}"\n'
+            'DB_PASSWORD="${DB_PASSWORD:-}"\n'
+            'AUTH_DB="${AUTH_DB:-}"\n'
+            "\n"
+            'timestamp="$(date -u +%Y%m%dT%H%M%SZ)"\n'
+            'finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"\n'
+            'start_epoch="$(date +%s)"\n'
+            'artifact_path=""\n'
+            'checksum_path=""\n'
+            'status="failed"\n'
+            'message=""\n'
+            'tmp_dir=""\n'
+            "\n"
+            "write_status() {\n"
+            '  python3 - "$STATUS_FILE" "$JOB_NAME" "$ENGINE" "$status" "$artifact_path" "$checksum_path" "$finished_at" "$duration_seconds" "$message" <<\'PY\'\n'
+            "import json, sys\n"
+            "path, job, engine, status, artifact, checksum, finished_at, duration_seconds, message = sys.argv[1:]\n"
+            "payload = {\n"
+            '    "job_name": job,\n'
+            '    "engine": engine,\n'
+            '    "status": status,\n'
+            '    "artifact_path": artifact,\n'
+            '    "checksum_path": checksum,\n'
+            '    "finished_at": finished_at,\n'
+            '    "duration_seconds": int(duration_seconds or "0"),\n'
+            '    "message": message,\n'
+            "}\n"
+            "with open(path, 'w', encoding='utf-8') as f:\n"
+            "    json.dump(payload, f, ensure_ascii=False, indent=2)\n"
+            "    f.write('\\n')\n"
+            "PY\n"
+            "}\n"
+            "\n"
+            "finish_failure() {\n"
+            '  rc="${1:-1}"\n'
+            '  duration_seconds="$(( $(date +%s) - start_epoch ))"\n'
+            '  finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"\n'
+            '  status="failed"\n'
+            '  if [ -z "$message" ]; then\n'
+            '    message="backup failed"\n'
+            "  fi\n"
+            "  write_status\n"
+            '  [ -n "$tmp_dir" ] && rm -rf "$tmp_dir"\n'
+            '  exit "$rc"\n'
+            "}\n"
+            "\n"
+            "trap 'message=\"command failed: ${BASH_COMMAND}\"; finish_failure $?' ERR\n"
+            "\n"
+            'mkdir -p "$BACKUP_DIR"\n'
+            'available_mb="$(df -Pm "$BACKUP_DIR" | awk \'NR==2 {print $4}\')"\n'
+            'if [ -n "$available_mb" ] && [ "$available_mb" -lt "$VERIFY_FREE_MB" ]; then\n'
+            '  message="insufficient free space in backup directory"\n'
+            "  finish_failure 1\n"
+            "fi\n"
+            "\n"
+            'tmp_dir="$BACKUP_DIR/.tmp-${JOB_NAME}-${timestamp}"\n'
+            'mkdir -p "$tmp_dir"\n'
+            "\n"
+            'case "$ENGINE" in\n'
+            "  postgresql)\n"
+            '    export PGHOST="$DB_HOST"\n'
+            '    export PGPORT="$DB_PORT"\n'
+            '    export PGUSER="$DB_USER"\n'
+            '    export PGPASSWORD="$DB_PASSWORD"\n'
+            '    pg_dump --format=custom --no-owner --no-privileges --dbname="$DB_NAME" --file="$tmp_dir/backup$OUTPUT_EXTENSION"\n'
+            "    ;;\n"
+            "  mysql|mariadb)\n"
+            '    if command -v mysqldump >/dev/null 2>&1; then\n'
+            '      DUMP_BIN="mysqldump"\n'
+            '    elif command -v mariadb-dump >/dev/null 2>&1; then\n'
+            '      DUMP_BIN="mariadb-dump"\n'
+            "    else\n"
+            '      message="mysqldump or mariadb-dump not found"\n'
+            "      finish_failure 1\n"
+            "    fi\n"
+            '    export MYSQL_PWD="$DB_PASSWORD"\n'
+            '    if [ "$COMPRESSION_ENABLED" = "1" ]; then\n'
+            '      "$DUMP_BIN" --host="$DB_HOST" --port="$DB_PORT" --user="$DB_USER" --single-transaction --routines --events --triggers "$DB_NAME" | gzip -c > "$tmp_dir/backup$OUTPUT_EXTENSION"\n'
+            "    else\n"
+            '      "$DUMP_BIN" --host="$DB_HOST" --port="$DB_PORT" --user="$DB_USER" --single-transaction --routines --events --triggers "$DB_NAME" > "$tmp_dir/backup$OUTPUT_EXTENSION"\n'
+            "    fi\n"
+            "    ;;\n"
+            "  mongodb)\n"
+            '    MONGO_ARGS=(--host "$DB_HOST" --port "$DB_PORT" --archive="$tmp_dir/backup$OUTPUT_EXTENSION")\n'
+            '    if [ -n "$DB_NAME" ] && [ "$DB_NAME" != "all" ]; then\n'
+            '      MONGO_ARGS+=(--db "$DB_NAME")\n'
+            "    fi\n"
+            '    if [ "$COMPRESSION_ENABLED" = "1" ]; then\n'
+            '      MONGO_ARGS+=(--gzip)\n'
+            "    fi\n"
+            '    if [ -n "$DB_USER" ]; then\n'
+            '      MONGO_ARGS+=(--username "$DB_USER")\n'
+            "    fi\n"
+            '    if [ -n "$DB_PASSWORD" ]; then\n'
+            '      MONGO_ARGS+=(--password "$DB_PASSWORD")\n'
+            "    fi\n"
+            '    if [ -n "$AUTH_DB" ]; then\n'
+            '      MONGO_ARGS+=(--authenticationDatabase "$AUTH_DB")\n'
+            "    fi\n"
+            '    mongodump "${MONGO_ARGS[@]}"\n'
+            "    ;;\n"
+            "  *)\n"
+            '    message="unsupported backup engine"\n'
+            "    finish_failure 1\n"
+            "    ;;\n"
+            "esac\n"
+            "\n"
+            'artifact_path="$BACKUP_DIR/${JOB_NAME}_${timestamp}${OUTPUT_EXTENSION}"\n'
+            'mv "$tmp_dir/backup$OUTPUT_EXTENSION" "$artifact_path"\n'
+            'sha256sum "$artifact_path" > "$artifact_path.sha256"\n'
+            'checksum_path="$artifact_path.sha256"\n'
+            'mapfile -t old_files < <(find "$BACKUP_DIR" -maxdepth 1 -type f -name "${JOB_NAME}_*${OUTPUT_EXTENSION}" | sort -r)\n'
+            'if [ "${#old_files[@]}" -gt "$RETENTION_COUNT" ]; then\n'
+            '  for old_file in "${old_files[@]:$RETENTION_COUNT}"; do\n'
+            '    rm -f "$old_file" "$old_file.sha256"\n'
+            "  done\n"
+            "fi\n"
+            'duration_seconds="$(( $(date +%s) - start_epoch ))"\n'
+            'finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"\n'
+            'status="success"\n'
+            'message="backup completed successfully"\n'
+            "write_status\n"
+            'rm -rf "$tmp_dir"\n'
+            'echo "Backup finished: $artifact_path"\n'
+        )
 
     @staticmethod
     def _random_secret(length: int = 24) -> str:
@@ -1048,6 +1248,325 @@ class SystemActions:
                     result = status
             text_out = (result.stdout or result.stderr or "").strip()
             return result.returncode == 0, text_out
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def save_dr_profile(
+        profile_name: str,
+        service_name: str,
+        environment_name: str,
+        rpo_target: str,
+        rto_target: str,
+        incident_rpo: str = "",
+        max_downtime: str = "",
+        recovery_priority: str = "",
+        service_criticality: str = "",
+        operators: str = "",
+        approvers: str = "",
+        notes: str = "",
+        progress_callback=None,
+    ):
+        def update(percent: int, text: str):
+            if progress_callback:
+                progress_callback(completed=percent, description=f"[cyan]{text}[/cyan]")
+
+        try:
+            if os.name == "nt":
+                return False, SystemActions._txt(
+                    "Modulo de DR nao suportado no Windows.",
+                    "DR module is not supported on Windows.",
+                )
+            ok, msg = SystemActions._validate_service_name(profile_name)
+            if not ok:
+                return False, msg
+            if not service_name.strip():
+                return False, SystemActions._txt("Nome do servico nao pode ser vazio.", "Service name cannot be empty.")
+            if not environment_name.strip():
+                return False, SystemActions._txt("Ambiente nao pode ser vazio.", "Environment cannot be empty.")
+            if not rpo_target.strip() or not rto_target.strip():
+                return False, SystemActions._txt("RPO e RTO nao podem ser vazios.", "RPO and RTO cannot be empty.")
+
+            update(20, SystemActions._txt("Preparando diretorio de DR", "Preparing DR directory"))
+            os.makedirs(SystemActions._dr_profiles_dir(), exist_ok=True)
+            payload = {
+                "profile_name": profile_name,
+                "service_name": service_name.strip(),
+                "environment_name": environment_name.strip(),
+                "rpo_target": rpo_target.strip(),
+                "rto_target": rto_target.strip(),
+                "incident_rpo": incident_rpo.strip(),
+                "max_downtime": max_downtime.strip(),
+                "recovery_priority": recovery_priority.strip(),
+                "service_criticality": service_criticality.strip(),
+                "operators": operators.strip(),
+                "approvers": approvers.strip(),
+                "notes": notes.strip(),
+                "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+
+            update(70, SystemActions._txt("Gravando perfil de RPO/RTO", "Writing RPO/RTO profile"))
+            profile_file = os.path.join(SystemActions._dr_profiles_dir(), f"{profile_name}.json")
+            ok, msg = SystemActions._write_json_file(profile_file, payload, mode=0o600)
+            if not ok:
+                return False, msg
+
+            update(100, SystemActions._txt("Perfil de RPO/RTO salvo", "RPO/RTO profile saved"))
+            payload["profile_file"] = profile_file
+            return True, payload
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def list_dr_profiles():
+        profiles = []
+        try:
+            base_dir = SystemActions._dr_profiles_dir()
+            if not os.path.isdir(base_dir):
+                return profiles
+            for name in sorted(os.listdir(base_dir)):
+                if not name.endswith(".json"):
+                    continue
+                data = SystemActions._read_json_file(os.path.join(base_dir, name), default={}) or {}
+                if isinstance(data, dict):
+                    profiles.append(data)
+            return profiles
+        except Exception:
+            return profiles
+
+    @staticmethod
+    def configure_db_backup_job(
+        job_name: str,
+        engine: str,
+        db_name: str,
+        db_host: str,
+        db_port: int,
+        db_user: str,
+        db_password: str,
+        auth_db: str,
+        backup_dir: str,
+        retention_count: int,
+        on_calendar: str,
+        verify_free_mb: int = 512,
+        compression_enabled: bool = True,
+        progress_callback=None,
+    ):
+        def update(percent: int, text: str):
+            if progress_callback:
+                progress_callback(completed=percent, description=f"[cyan]{text}[/cyan]")
+
+        try:
+            if os.name == "nt":
+                return False, SystemActions._txt(
+                    "Modulo de backup DR nao suportado no Windows.",
+                    "DR backup module is not supported on Windows.",
+                )
+            ok, msg = SystemActions._validate_service_name(job_name)
+            if not ok:
+                return False, msg
+            engine_value = (engine or "").strip().lower()
+            if engine_value not in {"postgresql", "mysql", "mariadb", "mongodb"}:
+                return False, SystemActions._txt(
+                    "Engine de backup invalido. Use PostgreSQL, MySQL, MariaDB ou MongoDB.",
+                    "Invalid backup engine. Use PostgreSQL, MySQL, MariaDB or MongoDB.",
+                )
+            if not backup_dir.startswith("/"):
+                return False, SystemActions._txt("Diretorio de backup deve ser absoluto.", "Backup directory must be absolute.")
+            if not db_host.strip():
+                return False, SystemActions._txt("Host do banco nao pode ser vazio.", "Database host cannot be empty.")
+            if not isinstance(db_port, int) or not (1 <= db_port <= 65535):
+                return False, SystemActions._txt("Porta do banco invalida.", "Invalid database port.")
+            if retention_count < 1:
+                return False, SystemActions._txt("Retencao deve ser maior que zero.", "Retention must be greater than zero.")
+            if verify_free_mb < 128:
+                return False, SystemActions._txt(
+                    "Espaco livre minimo deve ser de pelo menos 128 MB.",
+                    "Minimum free space must be at least 128 MB.",
+                )
+            if not on_calendar.strip():
+                return False, SystemActions._txt("Agenda OnCalendar nao pode ser vazia.", "OnCalendar schedule cannot be empty.")
+
+            paths = SystemActions._dr_backup_job_paths(job_name)
+            os.makedirs(paths["job_dir"], exist_ok=True)
+            os.makedirs(backup_dir, exist_ok=True)
+
+            update(20, SystemActions._txt("Preparando arquivos do job de backup", "Preparing backup job files"))
+            extension_map = {
+                "postgresql": ".dump",
+                "mysql": ".sql.gz" if compression_enabled else ".sql",
+                "mariadb": ".sql.gz" if compression_enabled else ".sql",
+                "mongodb": ".archive.gz" if compression_enabled else ".archive",
+            }
+            output_extension = extension_map[engine_value]
+            env_vars = {
+                "STATUS_FILE": paths["status_file"],
+                "BACKUP_DIR": backup_dir,
+                "RETENTION_COUNT": str(retention_count),
+                "VERIFY_FREE_MB": str(verify_free_mb),
+                "DB_HOST": db_host.strip(),
+                "DB_PORT": str(db_port),
+                "DB_NAME": db_name.strip(),
+                "DB_USER": db_user.strip(),
+                "DB_PASSWORD": db_password,
+                "AUTH_DB": auth_db.strip(),
+            }
+            ok, msg = SystemActions.write_environment_file(paths["env_file"], env_vars)
+            if not ok:
+                return False, msg
+
+            ok, msg = SystemActions._write_text_file(
+                paths["script_file"],
+                SystemActions._db_backup_script_content(paths["safe_job"], engine_value, output_extension, compression_enabled),
+                mode=0o750,
+            )
+            if not ok:
+                return False, msg
+
+            config_payload = {
+                "job_name": paths["safe_job"],
+                "engine": engine_value,
+                "db_name": db_name.strip(),
+                "db_host": db_host.strip(),
+                "db_port": db_port,
+                "db_user": db_user.strip(),
+                "auth_db": auth_db.strip(),
+                "backup_dir": backup_dir,
+                "retention_count": retention_count,
+                "on_calendar": on_calendar.strip(),
+                "verify_free_mb": verify_free_mb,
+                "compression_enabled": compression_enabled,
+                "service_name": paths["service_name"],
+                "timer_name": paths["timer_name"],
+                "script_file": paths["script_file"],
+                "status_file": paths["status_file"],
+                "config_file": paths["config_file"],
+                "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            ok, msg = SystemActions._write_json_file(paths["config_file"], config_payload, mode=0o600)
+            if not ok:
+                return False, msg
+
+            update(55, SystemActions._txt("Gravando unit files do systemd", "Writing systemd unit files"))
+            service_content = (
+                "[Unit]\n"
+                f"Description=VPS Tools DB backup job {paths['safe_job']}\n"
+                "After=network.target\n"
+                "\n"
+                "[Service]\n"
+                "Type=oneshot\n"
+                f"EnvironmentFile={paths['env_file']}\n"
+                f"ExecStart={paths['script_file']}\n"
+                f"WorkingDirectory={paths['job_dir']}\n"
+                "User=root\n"
+                "Group=root\n"
+                "\n"
+            )
+            timer_content = (
+                "[Unit]\n"
+                f"Description=Schedule VPS Tools DB backup job {paths['safe_job']}\n"
+                "\n"
+                "[Timer]\n"
+                f"OnCalendar={on_calendar.strip()}\n"
+                "Persistent=true\n"
+                "RandomizedDelaySec=300\n"
+                f"Unit={paths['service_name']}.service\n"
+                "\n"
+                "[Install]\n"
+                "WantedBy=timers.target\n"
+                "\n"
+            )
+            ok, msg = SystemActions._write_text_file(paths["service_unit"], service_content)
+            if not ok:
+                return False, msg
+            ok, msg = SystemActions._write_text_file(paths["timer_unit"], timer_content)
+            if not ok:
+                return False, msg
+
+            update(80, SystemActions._txt("Recarregando e habilitando o timer", "Reloading and enabling the timer"))
+            for cmd in (
+                ["systemctl", "daemon-reload"],
+                ["systemctl", "enable", "--now", paths["timer_name"]],
+            ):
+                result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                if result.returncode != 0:
+                    return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                        f"Falha ao executar: {' '.join(cmd)}",
+                        f"Failed to execute: {' '.join(cmd)}",
+                    )
+
+            timer_status = subprocess.run(["systemctl", "status", paths["timer_name"], "--no-pager"], capture_output=True, text=True, check=False)
+            update(100, SystemActions._txt("Job de backup configurado", "Backup job configured"))
+            config_payload["timer_status"] = (timer_status.stdout or timer_status.stderr or "").strip()
+            return True, config_payload
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def list_db_backup_jobs():
+        jobs = []
+        try:
+            base_dir = SystemActions._dr_jobs_dir()
+            if not os.path.isdir(base_dir):
+                return jobs
+            for name in sorted(os.listdir(base_dir)):
+                config_file = os.path.join(base_dir, name, "job.json")
+                config = SystemActions._read_json_file(config_file, default={}) or {}
+                if not isinstance(config, dict) or not config:
+                    continue
+                service_name = config.get("service_name") or f"vps-tools-db-backup-{name}"
+                timer_name = config.get("timer_name") or f"{service_name}.timer"
+                timer_active = subprocess.run(["systemctl", "is-active", timer_name], capture_output=True, text=True, check=False)
+                timer_enabled = subprocess.run(["systemctl", "is-enabled", timer_name], capture_output=True, text=True, check=False)
+                last_status = SystemActions._read_json_file(os.path.join(base_dir, name, "last_status.json"), default={}) or {}
+                config["timer_active"] = (timer_active.stdout or "").strip()
+                config["timer_enabled"] = (timer_enabled.stdout or "").strip()
+                config["last_status"] = last_status if isinstance(last_status, dict) else {}
+                jobs.append(config)
+            return jobs
+        except Exception:
+            return jobs
+
+    @staticmethod
+    def run_db_backup_job_now(job_name: str):
+        try:
+            paths = SystemActions._dr_backup_job_paths(job_name)
+            if not os.path.exists(paths["config_file"]):
+                return False, SystemActions._txt(
+                    f"Job de backup nao encontrado: {job_name}",
+                    f"Backup job not found: {job_name}",
+                )
+            result = subprocess.run(["systemctl", "start", f"{paths['service_name']}.service"], capture_output=True, text=True, check=False)
+            service_status = subprocess.run(["systemctl", "status", f"{paths['service_name']}.service", "--no-pager"], capture_output=True, text=True, check=False)
+            logs = subprocess.run(["journalctl", "-u", f"{paths['service_name']}.service", "-n", "80", "--no-pager"], capture_output=True, text=True, check=False)
+            last_status = SystemActions._read_json_file(paths["status_file"], default={}) or {}
+            ok = result.returncode == 0
+            return ok, {
+                "service_status": (service_status.stdout or service_status.stderr or "").strip(),
+                "logs": (logs.stdout or logs.stderr or "").strip(),
+                "last_status": last_status if isinstance(last_status, dict) else {},
+            }
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def db_backup_job_status(job_name: str):
+        try:
+            paths = SystemActions._dr_backup_job_paths(job_name)
+            if not os.path.exists(paths["config_file"]):
+                return False, SystemActions._txt(
+                    f"Job de backup nao encontrado: {job_name}",
+                    f"Backup job not found: {job_name}",
+                )
+            config = SystemActions._read_json_file(paths["config_file"], default={}) or {}
+            timer_status = subprocess.run(["systemctl", "status", paths["timer_name"], "--no-pager"], capture_output=True, text=True, check=False)
+            service_status = subprocess.run(["systemctl", "status", f"{paths['service_name']}.service", "--no-pager"], capture_output=True, text=True, check=False)
+            last_status = SystemActions._read_json_file(paths["status_file"], default={}) or {}
+            return True, {
+                "config": config if isinstance(config, dict) else {},
+                "timer_status": (timer_status.stdout or timer_status.stderr or "").strip(),
+                "service_status": (service_status.stdout or service_status.stderr or "").strip(),
+                "last_status": last_status if isinstance(last_status, dict) else {},
+            }
         except Exception as exc:
             return False, str(exc)
 

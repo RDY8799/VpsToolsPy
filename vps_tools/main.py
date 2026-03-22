@@ -379,6 +379,56 @@ class VPSToolsApp:
             )
         )
 
+    def _dr_status_panel(self):
+        profiles = self.sys_actions.list_dr_profiles()
+        jobs = self.sys_actions.list_db_backup_jobs()
+
+        summary = Table(
+            title=self._txt("[bold yellow]RECUPERACAO / DR[/bold yellow]", "[bold yellow]RECOVERY / DR[/bold yellow]"),
+            box=None,
+            show_header=True,
+            expand=True,
+        )
+        summary.add_column(self._txt("Componente", "Component"), style="cyan", width=20)
+        summary.add_column(self._txt("Status", "Status"), style="white", width=12)
+        summary.add_column(self._txt("Observacao", "Note"), style="white")
+        summary.add_row(
+            self._txt("Perfis RPO/RTO", "RPO/RTO Profiles"),
+            self._status_badge(bool(profiles)),
+            self._txt(f"{len(profiles)} perfil(is)", f"{len(profiles)} profile(s)"),
+        )
+        active_jobs = sum(1 for job in jobs if (job.get("timer_active") or "").strip() == "active")
+        summary.add_row(
+            self._txt("Jobs de backup", "Backup jobs"),
+            self._status_badge(bool(jobs)),
+            self._txt(f"{len(jobs)} job(s), {active_jobs} timer(s) ativo(s)", f"{len(jobs)} job(s), {active_jobs} active timer(s)"),
+        )
+        self.ui.console.print(Panel(summary, border_style="blue"))
+
+        if jobs:
+            table = Table(
+                title=self._txt("[bold cyan]JOBS DE BACKUP[/bold cyan]", "[bold cyan]BACKUP JOBS[/bold cyan]"),
+                box=None,
+                show_header=True,
+                expand=True,
+            )
+            table.add_column(self._txt("Job", "Job"), style="cyan", width=18)
+            table.add_column(self._txt("Engine", "Engine"), style="white", width=12)
+            table.add_column(self._txt("Timer", "Timer"), style="white", width=10)
+            table.add_column(self._txt("Ultimo status", "Last status"), style="white", width=14)
+            table.add_column(self._txt("Destino", "Destination"), style="white")
+            for job in jobs[:8]:
+                last_status = (job.get("last_status") or {}).get("status") or self._txt("sem execucao", "not run")
+                timer_active = (job.get("timer_active") or "").strip() == "active"
+                table.add_row(
+                    job.get("job_name", "-"),
+                    job.get("engine", "-"),
+                    self._status_badge(timer_active),
+                    str(last_status),
+                    job.get("backup_dir", "-"),
+                )
+            self.ui.console.print(Panel(table, border_style="cyan"))
+
     def _postgres_setup_flow(self):
         if not self._confirm("criacao de banco de dados postgresql local"):
             return
@@ -516,6 +566,150 @@ class VPSToolsApp:
                     border_style="green",
                 )
             )
+        else:
+            self.ui.print_error(data)
+        self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+
+    def _dr_profile_flow(self):
+        if not self._confirm("definicao de perfil de RPO e RTO"):
+            return
+        profile_name = self._prompt_default("Identificador do perfil", "Profile identifier", "backend-prod")
+        service_name = self._prompt_default("Nome do servico/sistema", "Service/system name", "backend")
+        environment_name = self._prompt_default("Ambiente", "Environment", "producao")
+        rpo_target = self._prompt_default("RPO alvo", "Target RPO", "15 minutos")
+        rto_target = self._prompt_default("RTO alvo", "Target RTO", "60 minutos")
+        incident_rpo = self._prompt_default("RPO/RTO por tipo de incidente", "RPO/RTO by incident type", "")
+        max_downtime = self._prompt_default("Janela maxima de indisponibilidade", "Maximum acceptable downtime", "")
+        recovery_priority = self._prompt_default("Prioridade de restauracao", "Recovery priority", "alta")
+        service_criticality = self._prompt_default("Criticidade do servico", "Service criticality", "critico")
+        operators = self._prompt_default("Responsaveis pela operacao", "Operations owners", "")
+        approvers = self._prompt_default("Responsaveis pela aprovacao", "Approval owners", "")
+        notes = self._prompt_default("Observacoes", "Notes", "")
+
+        def worker(update):
+            return self.sys_actions.save_dr_profile(
+                profile_name=profile_name,
+                service_name=service_name,
+                environment_name=environment_name,
+                rpo_target=rpo_target,
+                rto_target=rto_target,
+                incident_rpo=incident_rpo,
+                max_downtime=max_downtime,
+                recovery_priority=recovery_priority,
+                service_criticality=service_criticality,
+                operators=operators,
+                approvers=approvers,
+                notes=notes,
+                progress_callback=update,
+            )
+
+        ok, data = self.ui.run_animated_task(self._txt("Salvando perfil de DR", "Saving DR profile"), worker)
+        if ok:
+            summary = (
+                f"[white]{self._txt('Perfil', 'Profile')}:[/white] [cyan]{data['profile_name']}[/cyan]\n"
+                f"[white]{self._txt('Servico', 'Service')}:[/white] [cyan]{data['service_name']}[/cyan]\n"
+                f"[white]{self._txt('Ambiente', 'Environment')}:[/white] [cyan]{data['environment_name']}[/cyan]\n"
+                f"[white]RPO:[/white] [cyan]{data['rpo_target']}[/cyan]\n"
+                f"[white]RTO:[/white] [cyan]{data['rto_target']}[/cyan]\n"
+                f"[white]{self._txt('Arquivo', 'File')}:[/white] [cyan]{data['profile_file']}[/cyan]"
+            )
+            self.ui.console.print(Panel(summary, title=self._txt("PERFIL DR SALVO", "DR PROFILE SAVED"), border_style="green"))
+        else:
+            self.ui.print_error(data)
+        self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+
+    def _dr_backup_job_flow(self):
+        if not self._confirm("configuracao de job de backup logico"):
+            return
+        job_name = self._prompt_default("Nome do job", "Job name", "postgres-prod-diario")
+        engine = self._prompt_default("Engine (postgresql/mysql/mariadb/mongodb)", "Engine (postgresql/mysql/mariadb/mongodb)", "postgresql").lower()
+        db_name = self._prompt_default("Nome do banco", "Database name", "hospital")
+        db_host = self._prompt_default("Host do banco", "Database host", "127.0.0.1")
+        db_port = self._prompt_int_default("Porta do banco", "Database port", 5432 if engine == "postgresql" else (27017 if engine == "mongodb" else 3306))
+        db_user = self._prompt_default("Usuario do banco", "Database user", "hospital_app")
+        db_password = self._prompt_default("Senha do banco", "Database password", "")
+        auth_db = self._prompt_default("Authentication DB (MongoDB ou vazio)", "Authentication DB (MongoDB or empty)", "admin" if engine == "mongodb" else "")
+        backup_dir = self._prompt_default("Diretorio local de backup", "Local backup directory", f"/var/backups/vps-tools/{job_name}")
+        retention_count = self._prompt_int_default("Qtd de backups para reter", "Number of backups to retain", 7)
+        on_calendar = self._prompt_default("Agenda systemd OnCalendar", "systemd OnCalendar schedule", "*-*-* 02:00:00")
+        verify_free_mb = self._prompt_int_default("Espaco livre minimo em MB", "Minimum free space in MB", 512)
+        compression_enabled = self._prompt_bool_default("Ativar compressao quando aplicavel", "Enable compression when applicable", True)
+
+        def worker(update):
+            return self.sys_actions.configure_db_backup_job(
+                job_name=job_name,
+                engine=engine,
+                db_name=db_name,
+                db_host=db_host,
+                db_port=db_port,
+                db_user=db_user,
+                db_password=db_password,
+                auth_db=auth_db,
+                backup_dir=backup_dir,
+                retention_count=retention_count,
+                on_calendar=on_calendar,
+                verify_free_mb=verify_free_mb,
+                compression_enabled=compression_enabled,
+                progress_callback=update,
+            )
+
+        ok, data = self.ui.run_animated_task(self._txt("Configurando job de backup", "Configuring backup job"), worker)
+        if ok:
+            summary = (
+                f"[white]{self._txt('Job', 'Job')}:[/white] [cyan]{data['job_name']}[/cyan]\n"
+                f"[white]Engine:[/white] [cyan]{data['engine']}[/cyan]\n"
+                f"[white]{self._txt('Banco', 'Database')}:[/white] [cyan]{data['db_name']}[/cyan]\n"
+                f"[white]{self._txt('Destino', 'Destination')}:[/white] [cyan]{data['backup_dir']}[/cyan]\n"
+                f"[white]{self._txt('Retencao', 'Retention')}:[/white] [cyan]{data['retention_count']}[/cyan]\n"
+                f"[white]OnCalendar:[/white] [cyan]{data['on_calendar']}[/cyan]\n"
+                f"[white]{self._txt('Service', 'Service')}:[/white] [cyan]{data['service_name']}.service[/cyan]\n"
+                f"[white]{self._txt('Timer', 'Timer')}:[/white] [cyan]{data['timer_name']}[/cyan]\n\n"
+                f"[white]systemctl status {data['timer_name']}[/white]\n{data['timer_status'][-2000:]}"
+            )
+            self.ui.console.print(Panel(summary, title=self._txt("JOB DE BACKUP CONFIGURADO", "BACKUP JOB CONFIGURED"), border_style="green"))
+        else:
+            self.ui.print_error(data)
+        self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+
+    def _dr_run_backup_now_flow(self):
+        if not self._confirm("execucao imediata do job de backup"):
+            return
+        job_name = self._prompt_default("Nome do job", "Job name", "postgres-prod-diario")
+        ok, data = self.sys_actions.run_db_backup_job_now(job_name)
+        if ok:
+            last_status = data.get("last_status") or {}
+            summary = (
+                f"[white]{self._txt('Status', 'Status')}:[/white] [cyan]{last_status.get('status', '-')}[/cyan]\n"
+                f"[white]{self._txt('Artefato', 'Artifact')}:[/white] [cyan]{last_status.get('artifact_path', '-')}[/cyan]\n"
+                f"[white]{self._txt('Checksum', 'Checksum')}:[/white] [cyan]{last_status.get('checksum_path', '-')}[/cyan]\n"
+                f"[white]{self._txt('Duracao', 'Duration')}:[/white] [cyan]{last_status.get('duration_seconds', '-')}[/cyan]\n"
+                f"[white]{self._txt('Mensagem', 'Message')}:[/white] [cyan]{last_status.get('message', '-')}[/cyan]\n\n"
+                f"[white]journalctl[/white]\n{data['logs'][-2500:]}"
+            )
+            self.ui.console.print(Panel(summary, title=self._txt("BACKUP EXECUTADO", "BACKUP EXECUTED"), border_style="green"))
+        else:
+            self.ui.print_error(data)
+        self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+
+    def _dr_backup_status_flow(self):
+        job_name = self._prompt_default("Nome do job", "Job name", "postgres-prod-diario")
+        ok, data = self.sys_actions.db_backup_job_status(job_name)
+        if ok:
+            config = data.get("config") or {}
+            last_status = data.get("last_status") or {}
+            summary = (
+                f"[white]{self._txt('Job', 'Job')}:[/white] [cyan]{config.get('job_name', '-')}[/cyan]\n"
+                f"[white]Engine:[/white] [cyan]{config.get('engine', '-')}[/cyan]\n"
+                f"[white]{self._txt('Banco', 'Database')}:[/white] [cyan]{config.get('db_name', '-')}[/cyan]\n"
+                f"[white]{self._txt('Destino', 'Destination')}:[/white] [cyan]{config.get('backup_dir', '-')}[/cyan]\n"
+                f"[white]OnCalendar:[/white] [cyan]{config.get('on_calendar', '-')}[/cyan]\n"
+                f"[white]{self._txt('Ultimo status', 'Last status')}:[/white] [cyan]{last_status.get('status', '-')}[/cyan]\n"
+                f"[white]{self._txt('Ultimo artefato', 'Last artifact')}:[/white] [cyan]{last_status.get('artifact_path', '-')}[/cyan]\n"
+                f"[white]{self._txt('Ultima mensagem', 'Last message')}:[/white] [cyan]{last_status.get('message', '-')}[/cyan]\n\n"
+                f"[white]Timer[/white]\n{data['timer_status'][-1600:]}\n\n"
+                f"[white]Service[/white]\n{data['service_status'][-1600:]}"
+            )
+            self.ui.console.print(Panel(summary, title=self._txt("STATUS DO BACKUP", "BACKUP STATUS"), border_style="blue"))
         else:
             self.ui.print_error(data)
         self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
@@ -1183,6 +1377,34 @@ class VPSToolsApp:
                 self.ui.print_error(self.lang.t("menu.invalid", "Opcao invalida!"))
                 time.sleep(2)
 
+    def disaster_recovery_menu(self):
+        while True:
+            self.ui.clear()
+            self._dr_status_panel()
+            options = {
+                "01": self._txt("DEFINIR PERFIL RPO / RTO", "DEFINE RPO / RTO PROFILE"),
+                "02": self._txt("CONFIGURAR BACKUP LOGICO DE BANCO", "CONFIGURE LOGICAL DATABASE BACKUP"),
+                "03": self._txt("EXECUTAR BACKUP AGORA", "RUN BACKUP NOW"),
+                "04": self._txt("STATUS DO BACKUP", "BACKUP STATUS"),
+                "00": self.lang.t("menu.back", "VOLTAR"),
+            }
+            self.ui.draw_menu(options, self._txt("RECUPERACAO / DR", "RECOVERY / DR"))
+            option = self._normalize_option(self.ui.prompt())
+
+            if option == "1":
+                self._dr_profile_flow()
+            elif option == "2":
+                self._dr_backup_job_flow()
+            elif option == "3":
+                self._dr_run_backup_now_flow()
+            elif option == "4":
+                self._dr_backup_status_flow()
+            elif option == "00":
+                break
+            else:
+                self.ui.print_error(self.lang.t("menu.invalid", "Opcao invalida!"))
+                time.sleep(2)
+
     def main_menu(self):
         while True:
             self.ui.clear()
@@ -1200,7 +1422,8 @@ class VPSToolsApp:
                 "02": self.lang.t("main.users", "GERENCIAMENTO DE USUARIOS"),
                 "03": self.lang.t("main.tools", "FERRAMENTAS DO SISTEMA"),
                 "04": self._txt("BANCO DE DADOS / BACKEND", "DATABASE / BACKEND"),
-                "05": self.lang.t("main.about", "SOBRE"),
+                "05": self._txt("RECUPERACAO / DR", "RECOVERY / DR"),
+                "06": self.lang.t("main.about", "SOBRE"),
                 "00": self.lang.t("main.exit", "SAIR"),
             }
             self.ui.draw_menu(options)
@@ -1216,6 +1439,8 @@ class VPSToolsApp:
             elif option == "4":
                 self.database_backend_menu()
             elif option == "5":
+                self.disaster_recovery_menu()
+            elif option == "6":
                 self.about()
             elif option == "00":
                 sys.exit(0)

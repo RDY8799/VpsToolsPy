@@ -1,0 +1,126 @@
+[x] FASE 1 IMPLEMENTADA
+  [x] Criar menu principal RECUPERACAO / DR
+  [x] Criar painel de status de DR
+  [x] Criar cadastro de perfil RPO / RTO
+  [x] Criar rotina de backup logico agendado
+  [x] Suportar PostgreSQL
+  [x] Suportar MySQL / MariaDB
+  [x] Suportar MongoDB
+  [x] Criar systemd service para job de backup
+  [x] Criar systemd timer para agenda automatica
+  [x] Permitir execucao manual do backup
+  [x] Gerar arquivo de status do ultimo backup
+  [x] Exibir status do timer e do service
+
+[ ] DEFINIR RPO E RTO
+  [x] Criar estrutura para definir RPO por sistema, banco e ambiente
+  [x] Criar estrutura para definir RTO por sistema, banco e ambiente
+  [ ] Definir RPO/RTO por tipo de incidente
+  [ ] Definir janela maxima de indisponibilidade aceitavel
+  [ ] Definir prioridade de restauracao por servico
+  [ ] Registrar criticidade dos servicos
+  [ ] Registrar responsaveis pela operacao e aprovacao
+  [ ] Testar no servidor os perfis cadastrados e medir aderencia real
+
+[ ] AUTOMATICO
+  [x] Gerar backup logico
+  [ ] Enviar backup offsite
+  [x] Aplicar retencao
+  [x] Verificar checksum
+  [ ] Criptografar backups
+  [ ] Versionar backups offsite
+  [x] Validar espaco livre antes do backup
+  [ ] Validar integridade do banco antes do dump, quando aplicavel
+  [ ] Testar restore automatico
+  [x] Medir duracao do backup
+  [ ] Medir duracao do restore
+  [ ] Exportar configs da VPS
+  [ ] Checar saude de servicos
+  [ ] Monitorar SSL
+  [ ] Monitorar dominio
+  [ ] Monitorar disco
+  [ ] Monitorar RAM
+  [ ] Monitorar CPU
+  [ ] Monitorar falha de backup
+  [ ] Testar conectividade com destino offsite
+  [ ] Disparar alertas
+  [x] Gerar relatorio/status
+  [x] Registrar logs de execucao e historico de falhas
+
+[ ] SEMI-AUTOMATICO
+  [ ] Promover replica
+  [ ] Trocar DNS
+  [ ] Restaurar para maquina reserva
+  [ ] Recriar VPS a partir de template/IaC
+  [ ] Rotacionar segredos mais sensiveis
+  [ ] Executar checklist pre-failover
+  [ ] Confirmar saude da replica antes da promocao
+  [ ] Gerar plano de rollback
+  [ ] Exibir impacto estimado antes da execucao
+  [ ] Garantir que cada acao critica tenha comando unico
+  [ ] Garantir que cada acao critica peca confirmacao
+  [ ] Garantir que cada acao critica tenha runbook automatico guiado
+  [ ] Exigir dupla confirmacao em acoes destrutivas
+
+[ ] MANUAL / ASSISTIDO
+  [ ] Desastre real com decisao de failover
+  [ ] Restore para producao
+  [ ] Troca definitiva de provedor/IP
+  [ ] Incidentes de seguranca/ransomware
+  [ ] Preservar evidencias e logs do incidente
+  [ ] Acionar modo de contencao em incidente de seguranca
+  [ ] Registrar linha do tempo do incidente
+
+[ ] PRINCIPIO OPERACIONAL
+  [x] Automatizar o que e repetitivo e seguro
+  [x] Assistir o operador no que e critico e irreversivel
+  [x] Evitar automacao total em failover real
+  [x] Evitar automacao total em mudanca definitiva de producao
+  [x] Nunca sobrescrever backup bom sem retencao
+  [x] Nunca executar acao irreversivel sem confirmacao explicita
+  [x] Nunca depender de um unico destino de backup
+
+[ ] EXERCICIOS DE DESASTRE
+  [ ] Simular perda total da VPS
+  [ ] Simular perda do banco
+  [ ] Simular corrupcao logica do banco
+  [ ] Simular indisponibilidade do storage offsite
+  [ ] Simular falha da replica
+  [ ] Simular restore completo
+  [ ] Simular troca para servidor reserva
+  [ ] Registrar tempo real de recuperacao
+  [ ] Comparar recuperacao real com RPO/RTO definido
+
+[ ] EXEMPLOS DE DECISAO
+  [x] Backup diario automatico: sim
+  [ ] Restore de teste automatico: sim
+  [ ] Promocao de replica para primaria: com confirmacao
+  [ ] Troca de DNS de producao: com confirmacao
+  [ ] Restore em producao: manual / assistido
+
+[ ] REGRAS DE EXECUCAO CONTINUA
+  [ ] Sempre testar no servidor antes de marcar a etapa como concluida
+  [ ] Sempre medir o tempo real de cada etapa no servidor
+  [ ] Sempre comparar o tempo real com o RPO / RTO definido
+  [ ] Sempre atualizar este arquivo ao adicionar, remover ou invalidar etapas
+  [ ] Sempre detalhar a etapa de forma clara para operador sem experiencia previa
+  [ ] Sempre fazer commit detalhado por etapa relevante
+  [ ] Sempre registrar no commit o que foi feito e o resultado obtido
+
+[ ] PROXIMA FASE RECOMENDADA
+  [ ] Implementar envio offsite
+  [ ] Implementar criptografia de backup
+  [ ] Implementar alerta de falha
+  [ ] Implementar teste automatico de restore
+  [ ] Implementar export de configuracoes da VPS
+  [ ] Implementar monitoramento basico de disco, RAM, CPU e SSL
+
+Observacoes adicionadas pelo usuario:
+
+sempre va fazendo os testes no servidor, para conferir que o processo esta funcionando, e para medir o tempo de cada etapa, e comparar com o RPO/RTO definido.
+
+sempre atualize esses passos, para incluir novas etapas, ou remover etapas que se tornaram obsoletas, ou que nao se aplicam mais ao ambiente atual.
+
+detalhe bem cada etapa, para garantir que o processo seja claro e facil de seguir, mesmo para quem nao tem experiencia com o ambiente ou com o processo de DR.
+
+a cada etapa, faca o commit detalhado, explicando o que foi feito, e o resultado obtido, para manter um historico completo do processo de DR, e para facilitar a identificacao de falhas ou melhorias futuras.
