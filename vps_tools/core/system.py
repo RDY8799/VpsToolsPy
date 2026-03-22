@@ -2304,6 +2304,8 @@ class SystemActions:
         app_dir: str = "/opt/vps-tools-db-panel",
         site_name: str = "db-panel",
         server_names: list[str] | None = None,
+        publish_target: str = "domain",
+        ip_host: str = "",
         auth_user: str = "admin",
         auth_password: str = "",
         progress_callback=None,
@@ -2316,8 +2318,14 @@ class SystemActions:
             ok, msg = SystemActions._validate_service_name(site_name)
             if not ok:
                 return False, msg
+            publish_target = (publish_target or "domain").strip().lower()
             server_names = [item.strip() for item in (server_names or []) if item.strip()]
-            if not server_names:
+            if publish_target not in {"domain", "ip"}:
+                return False, SystemActions._txt(
+                    "Modo de publicacao invalido para o painel.",
+                    "Invalid panel publishing mode.",
+                )
+            if publish_target == "domain" and not server_names:
                 return False, SystemActions._txt(
                     "Informe ao menos um dominio/server_name para o painel.",
                     "Provide at least one domain/server_name for the panel.",
@@ -2337,6 +2345,18 @@ class SystemActions:
                     "Web panel is not installed or has no detected port.",
                 )
             panel_port = int(status["panel_port"])
+            if publish_target == "ip":
+                publish_host = (ip_host or "").strip() or SystemInfo.get_ip()
+                if not publish_host or publish_host.lower() == "unknown":
+                    return False, SystemActions._txt(
+                        "Nao foi possivel detectar o IP publico do painel. Informe o IP manualmente.",
+                        "Could not detect the panel public IP. Provide the IP manually.",
+                    )
+                server_name_line = publish_host
+                published_url = f"http://{publish_host}/"
+            else:
+                server_name_line = " ".join(server_names)
+                published_url = f"http://{server_names[0]}/"
 
             update(10, SystemActions._txt("Instalando Nginx e OpenSSL", "Installing Nginx and OpenSSL"))
             result = subprocess.run(["apt-get", "update", "-y"], capture_output=True, text=True, check=False)
@@ -2361,7 +2381,6 @@ class SystemActions:
             if not ok:
                 return False, msg
 
-            server_name_line = " ".join(server_names)
             conf_content = (
                 "server {\n"
                 "    listen 80;\n"
@@ -2413,11 +2432,12 @@ class SystemActions:
             return True, {
                 "site_name": site_name,
                 "server_names": server_name_line,
+                "publish_target": publish_target,
                 "config_file": available,
                 "htpasswd_file": htpasswd_path,
                 "auth_user": auth_user,
                 "auth_password": auth_password,
-                "published_url": f"http://{server_names[0]}/",
+                "published_url": published_url,
                 "panel_port": panel_port,
                 "nginx_status": (status_result.stdout or status_result.stderr or "").strip(),
             }

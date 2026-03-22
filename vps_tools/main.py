@@ -852,7 +852,17 @@ class VPSToolsApp:
         action = action_map.get(option)
         if option == "6":
             site_name = self._prompt_default("Nome do site Nginx", "Nginx site name", "db-panel")
-            domains = self._prompt_default("Dominios/server_name separados por espaco", "Domains/server_name separated by spaces", "db.example.com").split()
+            publish_by_ip = self._prompt_bool_default("Publicar por IP publico em HTTP", "Publish by public IP over HTTP", False)
+            target_ip = ""
+            domains = []
+            if publish_by_ip:
+                target_ip = self._prompt_default(
+                    "IP publico do painel (vazio = detectar automaticamente)",
+                    "Panel public IP (empty = auto-detect)",
+                    "",
+                )
+            else:
+                domains = self._prompt_default("Dominios/server_name separados por espaco", "Domains/server_name separated by spaces", "db.example.com").split()
             auth_user = self._prompt_default("Usuario de acesso do painel", "Panel access username", "admin")
             auth_password = self._prompt_default("Senha de acesso do painel (vazio = gerar)", "Panel access password (empty = generate)", "")
 
@@ -861,6 +871,8 @@ class VPSToolsApp:
                     app_dir=app_dir,
                     site_name=site_name,
                     server_names=domains,
+                    publish_target="ip" if publish_by_ip else "domain",
+                    ip_host=target_ip,
                     auth_user=auth_user,
                     auth_password=auth_password,
                     progress_callback=update,
@@ -868,8 +880,10 @@ class VPSToolsApp:
 
             ok, data = self.ui.run_animated_task(self._txt("Publicando painel via Nginx", "Publishing panel via Nginx"), worker)
             if ok:
+                mode_text = self._txt("IP publico (HTTP)", "Public IP (HTTP)") if data.get("publish_target") == "ip" else self._txt("Dominio", "Domain")
                 self.ui.console.print(
                     Panel(
+                        f"[white]{self._txt('Modo', 'Mode')}:[/white] [cyan]{mode_text}[/cyan]\n"
                         f"[white]URL:[/white] [cyan]{data['published_url']}[/cyan]\n"
                         f"[white]Login:[/white] [cyan]{data['auth_user']}[/cyan]\n"
                         f"[white]Senha:[/white] [cyan]{data['auth_password']}[/cyan]\n"
