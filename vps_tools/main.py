@@ -669,6 +669,16 @@ class VPSToolsApp:
             alert_on_success = self._prompt_bool_default("Enviar alerta em sucesso", "Send alert on success", False)
             alert_on_failure = self._prompt_bool_default("Enviar alerta em falha", "Send alert on failure", True)
             alert_timeout_sec = self._prompt_int_default("Timeout do alerta em segundos", "Alert timeout in seconds", 10)
+        encryption_mode = self._prompt_default(
+            "Modo de criptografia (none/gpg_symmetric)",
+            "Encryption mode (none/gpg_symmetric)",
+            "none",
+        ).lower()
+        encryption_passphrase = ""
+        encryption_cipher = "AES256"
+        if encryption_mode == "gpg_symmetric":
+            encryption_passphrase = self._prompt_default("Senha da criptografia", "Encryption passphrase", "")
+            encryption_cipher = self._prompt_default("Cifra da criptografia", "Encryption cipher", "AES256")
 
         def worker(update):
             return self.sys_actions.configure_db_backup_job(
@@ -697,6 +707,9 @@ class VPSToolsApp:
                 alert_on_success=alert_on_success,
                 alert_on_failure=alert_on_failure,
                 alert_timeout_sec=alert_timeout_sec,
+                encryption_mode=encryption_mode,
+                encryption_passphrase=encryption_passphrase,
+                encryption_cipher=encryption_cipher,
                 progress_callback=update,
             )
 
@@ -710,6 +723,9 @@ class VPSToolsApp:
             alert_summary = self._txt("desativado", "disabled")
             if data.get("alert_webhook_url"):
                 alert_summary = f"webhook ({self._txt('falha', 'failure')}={self._txt('sim', 'yes') if data.get('alert_on_failure') else self._txt('nao', 'no')}, {self._txt('sucesso', 'success')}={self._txt('sim', 'yes') if data.get('alert_on_success') else self._txt('nao', 'no')})"
+            encryption_summary = data.get("encryption_mode", "none")
+            if data.get("encryption_mode") == "gpg_symmetric":
+                encryption_summary = f"gpg_symmetric ({data.get('encryption_cipher', 'AES256')})"
             summary = (
                 f"[white]{self._txt('Job', 'Job')}:[/white] [cyan]{data['job_name']}[/cyan]\n"
                 f"[white]Engine:[/white] [cyan]{data['engine']}[/cyan]\n"
@@ -717,6 +733,7 @@ class VPSToolsApp:
                 f"[white]{self._txt('Destino', 'Destination')}:[/white] [cyan]{data['backup_dir']}[/cyan]\n"
                 f"[white]{self._txt('Destino secundario', 'Secondary destination')}:[/white] [cyan]{offsite_summary}[/cyan]\n"
                 f"[white]{self._txt('Alertas', 'Alerts')}:[/white] [cyan]{alert_summary}[/cyan]\n"
+                f"[white]{self._txt('Criptografia', 'Encryption')}:[/white] [cyan]{encryption_summary}[/cyan]\n"
                 f"[white]{self._txt('Retencao', 'Retention')}:[/white] [cyan]{data['retention_count']}[/cyan]\n"
                 f"[white]OnCalendar:[/white] [cyan]{data['on_calendar']}[/cyan]\n"
                 f"[white]{self._txt('Service', 'Service')}:[/white] [cyan]{data['service_name']}.service[/cyan]\n"
@@ -742,6 +759,7 @@ class VPSToolsApp:
                 f"[white]{self._txt('Status do secundario', 'Secondary status')}:[/white] [cyan]{last_status.get('offsite_status', '-')}[/cyan]\n"
                 f"[white]{self._txt('Artefato secundario', 'Secondary artifact')}:[/white] [cyan]{last_status.get('offsite_artifact_path', '-')}[/cyan]\n"
                 f"[white]{self._txt('Status do alerta', 'Alert status')}:[/white] [cyan]{last_status.get('alert_status', '-')}[/cyan]\n"
+                f"[white]{self._txt('Status da criptografia', 'Encryption status')}:[/white] [cyan]{last_status.get('encryption_status', '-')}[/cyan]\n"
                 f"[white]{self._txt('Duracao', 'Duration')}:[/white] [cyan]{last_status.get('duration_seconds', '-')}[/cyan]\n"
                 f"[white]{self._txt('Mensagem', 'Message')}:[/white] [cyan]{last_status.get('message', '-')}[/cyan]\n\n"
                 f"[white]journalctl[/white]\n{data['logs'][-2500:]}"
@@ -765,11 +783,13 @@ class VPSToolsApp:
                 f"[white]{self._txt('Modo secundario', 'Secondary mode')}:[/white] [cyan]{config.get('offsite_mode', '-')}[/cyan]\n"
                 f"[white]{self._txt('Destino secundario', 'Secondary destination')}:[/white] [cyan]{config.get('offsite_path', '-') or '-'}[/cyan]\n"
                 f"[white]{self._txt('Webhook', 'Webhook')}:[/white] [cyan]{config.get('alert_webhook_url', '-') or '-'}[/cyan]\n"
+                f"[white]{self._txt('Criptografia', 'Encryption')}:[/white] [cyan]{config.get('encryption_mode', '-') or '-'}[/cyan]\n"
                 f"[white]OnCalendar:[/white] [cyan]{config.get('on_calendar', '-')}[/cyan]\n"
                 f"[white]{self._txt('Ultimo status', 'Last status')}:[/white] [cyan]{last_status.get('status', '-')}[/cyan]\n"
                 f"[white]{self._txt('Ultimo artefato', 'Last artifact')}:[/white] [cyan]{last_status.get('artifact_path', '-')}[/cyan]\n"
                 f"[white]{self._txt('Ultimo status do secundario', 'Last secondary status')}:[/white] [cyan]{last_status.get('offsite_status', '-')}[/cyan]\n"
                 f"[white]{self._txt('Ultimo status do alerta', 'Last alert status')}:[/white] [cyan]{last_status.get('alert_status', '-')}[/cyan]\n"
+                f"[white]{self._txt('Ultimo status da criptografia', 'Last encryption status')}:[/white] [cyan]{last_status.get('encryption_status', '-')}[/cyan]\n"
                 f"[white]{self._txt('Ultima mensagem', 'Last message')}:[/white] [cyan]{last_status.get('message', '-')}[/cyan]\n\n"
                 f"[white]Timer[/white]\n{data['timer_status'][-1600:]}\n\n"
                 f"[white]Service[/white]\n{data['service_status'][-1600:]}"

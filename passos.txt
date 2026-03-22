@@ -88,6 +88,35 @@ Resultado real da validacao da fase 3 no servidor:
   [x] Offsite real ainda pendente; a validacao desta fase cobre apenas copia secundaria local e webhook local
   [x] RPO/RTO ainda nao comparados porque o perfil operacional final ainda nao foi fechado
 
+[x] FASE 4 IMPLEMENTADA
+  [x] Adicionar criptografia opcional ao job de backup
+  [x] Suportar criptografia simetrica com GPG em modo batch
+  [x] Registrar status de criptografia no ultimo backup
+  [x] Exibir criptografia no painel de configuracao, execucao e status do job
+  [x] Validar a fase 4 no servidor real
+  [x] Medir tempo real de configuracao da fase 4 no servidor
+  [x] Medir tempo real de execucao da fase 4 no servidor
+  [x] Validar descriptografia real do artefato
+  [x] Validar integridade do dump descriptografado com pg_restore -l
+  [x] Registrar resultado real da validacao da fase 4
+
+Resultado real da validacao da fase 4 no servidor:
+  [x] Servidor validado: api.dinvendas.com
+  [x] Job de teste criado: hospital-dr-stage4
+  [x] Banco validado: PostgreSQL hospital
+  [x] Tempo real de configuracao da fase 4: 0.66s
+  [x] Tempo real da execucao manual da fase 4: 1.20s
+  [x] Duracao real registrada no ultimo backup: 1s
+  [x] Artefato criptografado gerado com sucesso: .dump.gpg
+  [x] Checksum do artefato criptografado gerado com sucesso
+  [x] Copia secundaria local criptografada gerada com sucesso
+  [x] Webhook local de teste recebeu o alerta com sucesso
+  [x] Status da criptografia salvo com sucesso
+  [x] Artefato descriptografado com sucesso em teste real
+  [x] Dump descriptografado validado com pg_restore -l
+  [x] Offsite real ainda pendente; a validacao desta fase cobre criptografia local e copia secundaria local criptografada
+  [x] RPO/RTO ainda nao comparados porque o perfil operacional final ainda nao foi fechado
+
 [ ] DEFINIR RPO E RTO
   [x] Criar estrutura para definir RPO por sistema, banco e ambiente
   [x] Criar estrutura para definir RTO por sistema, banco e ambiente
@@ -103,7 +132,7 @@ Resultado real da validacao da fase 3 no servidor:
   [ ] Enviar backup offsite
   [x] Aplicar retencao
   [x] Verificar checksum
-  [ ] Criptografar backups
+  [x] Criptografar backups
   [ ] Versionar backups offsite
   [x] Validar espaco livre antes do backup
   [ ] Validar integridade do banco antes do dump, quando aplicavel

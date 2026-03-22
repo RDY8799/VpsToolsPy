@@ -612,6 +612,9 @@ class SystemActions:
             'ALERT_ON_SUCCESS="${ALERT_ON_SUCCESS:-0}"\n'
             'ALERT_ON_FAILURE="${ALERT_ON_FAILURE:-1}"\n'
             'ALERT_TIMEOUT_SEC="${ALERT_TIMEOUT_SEC:-10}"\n'
+            'ENCRYPTION_MODE="${ENCRYPTION_MODE:-none}"\n'
+            'ENCRYPTION_PASSPHRASE="${ENCRYPTION_PASSPHRASE:-}"\n'
+            'ENCRYPTION_CIPHER="${ENCRYPTION_CIPHER:-AES256}"\n'
             "\n"
             'timestamp="$(date -u +%Y%m%dT%H%M%SZ)"\n'
             'finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"\n'
@@ -628,9 +631,12 @@ class SystemActions:
             'offsite_message=""\n'
             'alert_status="disabled"\n'
             'alert_message=""\n'
+            'encryption_status="disabled"\n'
+            'encryption_message=""\n'
+            'raw_backup=""\n'
             "\n"
             "write_status() {\n"
-            '  python3 - "$STATUS_FILE" "$JOB_NAME" "$ENGINE" "$status" "$artifact_path" "$checksum_path" "$finished_at" "$duration_seconds" "$message" "$offsite_artifact_path" "$offsite_checksum_path" "$offsite_status" "$offsite_message" "$alert_status" "$alert_message" <<\'PY\'\n'
+            '  python3 - "$STATUS_FILE" "$JOB_NAME" "$ENGINE" "$status" "$artifact_path" "$checksum_path" "$finished_at" "$duration_seconds" "$message" "$offsite_artifact_path" "$offsite_checksum_path" "$offsite_status" "$offsite_message" "$alert_status" "$alert_message" "$encryption_status" "$encryption_message" "$ENCRYPTION_MODE" "$ENCRYPTION_CIPHER" <<\'PY\'\n'
             "import json, sys\n"
             "(\n"
             "    path,\n"
@@ -648,6 +654,10 @@ class SystemActions:
             "    offsite_message,\n"
             "    alert_status,\n"
             "    alert_message,\n"
+            "    encryption_status,\n"
+            "    encryption_message,\n"
+            "    encryption_mode,\n"
+            "    encryption_cipher,\n"
             ") = sys.argv[1:]\n"
             "payload = {\n"
             '    "job_name": job,\n'
@@ -664,6 +674,10 @@ class SystemActions:
             '    "offsite_message": offsite_message,\n'
             '    "alert_status": alert_status,\n'
             '    "alert_message": alert_message,\n'
+            '    "encryption_status": encryption_status,\n'
+            '    "encryption_message": encryption_message,\n'
+            '    "encryption_mode": encryption_mode,\n'
+            '    "encryption_cipher": encryption_cipher,\n'
             "}\n"
             "with open(path, 'w', encoding='utf-8') as f:\n"
             "    json.dump(payload, f, ensure_ascii=False, indent=2)\n"
@@ -730,6 +744,38 @@ class SystemActions:
             '      rm -f "$old_file" "$old_file.sha256"\n'
             "    done\n"
             "  fi\n"
+            "}\n"
+            "\n"
+            "encrypt_backup() {\n"
+            '  raw_backup="$1"\n'
+            '  case "$ENCRYPTION_MODE" in\n'
+            "    ''|none)\n"
+            '      mv "$raw_backup" "$artifact_path"\n'
+            '      encryption_status="disabled"\n'
+            '      encryption_message="backup encryption not configured"\n'
+            "      ;;\n"
+            "    gpg_symmetric)\n"
+            '      if ! command -v gpg >/dev/null 2>&1; then\n'
+            '        encryption_status="failed"\n'
+            '        encryption_message="gpg not found"\n'
+            "        return 1\n"
+            "      fi\n"
+            '      if [ -z "$ENCRYPTION_PASSPHRASE" ]; then\n'
+            '        encryption_status="failed"\n'
+            '        encryption_message="encryption passphrase is required"\n'
+            "        return 1\n"
+            "      fi\n"
+            '      printf "%s" "$ENCRYPTION_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --cipher-algo "$ENCRYPTION_CIPHER" --symmetric --output "$artifact_path" "$raw_backup"\n'
+            '      rm -f "$raw_backup"\n'
+            '      encryption_status="success"\n'
+            '      encryption_message="backup encrypted successfully"\n'
+            "      ;;\n"
+            "    *)\n"
+            '      encryption_status="failed"\n'
+            '      encryption_message="invalid encryption mode"\n'
+            "      return 1\n"
+            "      ;;\n"
+            "  esac\n"
             "}\n"
             "\n"
             "copy_offsite() {\n"
@@ -827,7 +873,8 @@ class SystemActions:
             '    export PGPORT="$DB_PORT"\n'
             '    export PGUSER="$DB_USER"\n'
             '    export PGPASSWORD="$DB_PASSWORD"\n'
-            '    pg_dump --format=custom --no-owner --no-privileges --dbname="$DB_NAME" --file="$tmp_dir/backup$OUTPUT_EXTENSION"\n'
+            '    raw_backup="$tmp_dir/backup.raw"\n'
+            '    pg_dump --format=custom --no-owner --no-privileges --dbname="$DB_NAME" --file="$raw_backup"\n'
             "    ;;\n"
             "  mysql|mariadb)\n"
             '    if command -v mysqldump >/dev/null 2>&1; then\n'
@@ -840,13 +887,16 @@ class SystemActions:
             "    fi\n"
             '    export MYSQL_PWD="$DB_PASSWORD"\n'
             '    if [ "$COMPRESSION_ENABLED" = "1" ]; then\n'
-            '      "$DUMP_BIN" --host="$DB_HOST" --port="$DB_PORT" --user="$DB_USER" --single-transaction --routines --events --triggers "$DB_NAME" | gzip -c > "$tmp_dir/backup$OUTPUT_EXTENSION"\n'
+            '      raw_backup="$tmp_dir/backup.raw"\n'
+            '      "$DUMP_BIN" --host="$DB_HOST" --port="$DB_PORT" --user="$DB_USER" --single-transaction --routines --events --triggers "$DB_NAME" | gzip -c > "$raw_backup"\n'
             "    else\n"
-            '      "$DUMP_BIN" --host="$DB_HOST" --port="$DB_PORT" --user="$DB_USER" --single-transaction --routines --events --triggers "$DB_NAME" > "$tmp_dir/backup$OUTPUT_EXTENSION"\n'
+            '      raw_backup="$tmp_dir/backup.raw"\n'
+            '      "$DUMP_BIN" --host="$DB_HOST" --port="$DB_PORT" --user="$DB_USER" --single-transaction --routines --events --triggers "$DB_NAME" > "$raw_backup"\n'
             "    fi\n"
             "    ;;\n"
             "  mongodb)\n"
-            '    MONGO_ARGS=(--host "$DB_HOST" --port "$DB_PORT" --archive="$tmp_dir/backup$OUTPUT_EXTENSION")\n'
+            '    raw_backup="$tmp_dir/backup.raw"\n'
+            '    MONGO_ARGS=(--host "$DB_HOST" --port "$DB_PORT" --archive="$raw_backup")\n'
             '    if [ -n "$DB_NAME" ] && [ "$DB_NAME" != "all" ]; then\n'
             '      MONGO_ARGS+=(--db "$DB_NAME")\n'
             "    fi\n"
@@ -871,7 +921,7 @@ class SystemActions:
             "esac\n"
             "\n"
             'artifact_path="$BACKUP_DIR/${JOB_NAME}_${timestamp}${OUTPUT_EXTENSION}"\n'
-            'mv "$tmp_dir/backup$OUTPUT_EXTENSION" "$artifact_path"\n'
+            'encrypt_backup "$raw_backup"\n'
             'sha256sum "$artifact_path" > "$artifact_path.sha256"\n'
             'checksum_path="$artifact_path.sha256"\n'
             'apply_retention "$BACKUP_DIR"\n'
@@ -1543,6 +1593,9 @@ class SystemActions:
         alert_on_success: bool = False,
         alert_on_failure: bool = True,
         alert_timeout_sec: int = 10,
+        encryption_mode: str = "none",
+        encryption_passphrase: str = "",
+        encryption_cipher: str = "AES256",
         progress_callback=None,
     ):
         def update(percent: int, text: str):
@@ -1621,6 +1674,28 @@ class SystemActions:
                     "Timeout do alerta deve ser de pelo menos 3 segundos.",
                     "Alert timeout must be at least 3 seconds.",
                 )
+            encryption_mode_value = (encryption_mode or "none").strip().lower()
+            if encryption_mode_value not in {"none", "gpg_symmetric"}:
+                return False, SystemActions._txt(
+                    "Modo de criptografia invalido. Use none ou gpg_symmetric.",
+                    "Invalid encryption mode. Use none or gpg_symmetric.",
+                )
+            if encryption_mode_value != "none":
+                if not encryption_passphrase:
+                    return False, SystemActions._txt(
+                        "Senha da criptografia nao pode ser vazia.",
+                        "Encryption passphrase cannot be empty.",
+                    )
+                if not shutil.which("gpg"):
+                    return False, SystemActions._txt(
+                        "gpg nao encontrado. Instale o pacote gnupg antes de ativar criptografia.",
+                        "gpg not found. Install the gnupg package before enabling encryption.",
+                    )
+                if not encryption_cipher.strip():
+                    return False, SystemActions._txt(
+                        "Algoritmo da criptografia nao pode ser vazio.",
+                        "Encryption cipher cannot be empty.",
+                    )
             if not on_calendar.strip():
                 return False, SystemActions._txt("Agenda OnCalendar nao pode ser vazia.", "OnCalendar schedule cannot be empty.")
 
@@ -1636,6 +1711,8 @@ class SystemActions:
                 "mongodb": ".archive.gz" if compression_enabled else ".archive",
             }
             output_extension = extension_map[engine_value]
+            if encryption_mode_value != "none":
+                output_extension = f"{output_extension}.gpg"
             env_vars = {
                 "STATUS_FILE": paths["status_file"],
                 "BACKUP_DIR": backup_dir,
@@ -1659,6 +1736,9 @@ class SystemActions:
                 "ALERT_ON_SUCCESS": "1" if alert_on_success else "0",
                 "ALERT_ON_FAILURE": "1" if alert_on_failure else "0",
                 "ALERT_TIMEOUT_SEC": str(alert_timeout_sec),
+                "ENCRYPTION_MODE": encryption_mode_value,
+                "ENCRYPTION_PASSPHRASE": encryption_passphrase,
+                "ENCRYPTION_CIPHER": encryption_cipher.strip(),
             }
             ok, msg = SystemActions.write_environment_file(paths["env_file"], env_vars)
             if not ok:
@@ -1697,6 +1777,8 @@ class SystemActions:
                 "alert_on_success": alert_on_success,
                 "alert_on_failure": alert_on_failure,
                 "alert_timeout_sec": alert_timeout_sec,
+                "encryption_mode": encryption_mode_value,
+                "encryption_cipher": encryption_cipher.strip(),
                 "service_name": paths["service_name"],
                 "timer_name": paths["timer_name"],
                 "script_file": paths["script_file"],
