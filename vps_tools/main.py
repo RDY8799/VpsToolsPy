@@ -822,6 +822,8 @@ class VPSToolsApp:
         self.ui.console.print(f"[yellow]3)[/yellow] {self._txt('Reiniciar painel', 'Restart panel')}")
         self.ui.console.print(f"[yellow]4)[/yellow] {self._txt('Status do painel', 'Panel status')}")
         self.ui.console.print(f"[yellow]5)[/yellow] {self._txt('Desinstalar painel', 'Uninstall panel')}")
+        self.ui.console.print(f"[yellow]6)[/yellow] {self._txt('Publicar painel via Nginx + login', 'Publish panel via Nginx + login')}")
+        self.ui.console.print(f"[yellow]7)[/yellow] {self._txt('Ativar HTTPS no painel', 'Enable HTTPS on panel')}")
         option = self._normalize_option(self.ui.prompt(self._txt("Opcao: ", "Option: ")))
 
         action_map = {
@@ -832,6 +834,71 @@ class VPSToolsApp:
             "5": "uninstall",
         }
         action = action_map.get(option)
+        if option == "6":
+            site_name = self._prompt_default("Nome do site Nginx", "Nginx site name", "db-panel")
+            domains = self._prompt_default("Dominios/server_name separados por espaco", "Domains/server_name separated by spaces", "db.example.com").split()
+            auth_user = self._prompt_default("Usuario de acesso do painel", "Panel access username", "admin")
+            auth_password = self._prompt_default("Senha de acesso do painel (vazio = gerar)", "Panel access password (empty = generate)", "")
+
+            def worker(update):
+                return self.sys_actions.publish_web_db_panel_via_nginx(
+                    app_dir=app_dir,
+                    site_name=site_name,
+                    server_names=domains,
+                    auth_user=auth_user,
+                    auth_password=auth_password,
+                    progress_callback=update,
+                )
+
+            ok, data = self.ui.run_animated_task(self._txt("Publicando painel via Nginx", "Publishing panel via Nginx"), worker)
+            if ok:
+                self.ui.console.print(
+                    Panel(
+                        f"[white]URL:[/white] [cyan]{data['published_url']}[/cyan]\n"
+                        f"[white]Login:[/white] [cyan]{data['auth_user']}[/cyan]\n"
+                        f"[white]Senha:[/white] [cyan]{data['auth_password']}[/cyan]\n"
+                        f"[white]Config:[/white] [cyan]{data['config_file']}[/cyan]\n"
+                        f"[white]Auth file:[/white] [cyan]{data['htpasswd_file']}[/cyan]\n\n"
+                        f"{data['nginx_status'][-2500:]}",
+                        title=self._txt("PAINEL PUBLICADO", "PANEL PUBLISHED"),
+                        border_style="green",
+                    )
+                )
+            else:
+                self.ui.print_error(data)
+            self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+            return
+
+        if option == "7":
+            domains = self._prompt_default("Dominios HTTPS separados por espaco", "HTTPS domains separated by spaces", "db.example.com").split()
+            email = self._prompt_default("E-mail do Let's Encrypt", "Let's Encrypt email", "admin@example.com")
+            redirect_https = self._prompt_bool_default("Redirecionar HTTP para HTTPS", "Redirect HTTP to HTTPS", True)
+
+            def worker(update):
+                return self.sys_actions.secure_web_db_panel_https(
+                    domains=domains,
+                    email=email,
+                    redirect_https=redirect_https,
+                    progress_callback=update,
+                )
+
+            ok, data = self.ui.run_animated_task(self._txt("Ativando HTTPS no painel", "Enabling panel HTTPS"), worker)
+            if ok:
+                self.ui.console.print(
+                    Panel(
+                        f"[white]Domains:[/white] [cyan]{data['domains']}[/cyan]\n"
+                        f"[white]Email:[/white] [cyan]{data['email']}[/cyan]\n\n"
+                        f"[white]Certbot[/white]\n{data['certbot_output'][-1200:]}\n\n"
+                        f"[white]Timer[/white]\n{data['timer_status'][-1200:]}",
+                        title=self._txt("HTTPS DO PAINEL CONFIGURADO", "PANEL HTTPS CONFIGURED"),
+                        border_style="green",
+                    )
+                )
+            else:
+                self.ui.print_error(data)
+            self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+            return
+
         if not action:
             self.ui.print_error(self.lang.t("menu.invalid", "Opcao invalida!"))
             time.sleep(1)

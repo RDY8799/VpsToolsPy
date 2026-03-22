@@ -244,6 +244,16 @@ Esse modulo instala um painel opcional com:
 
 O painel usa Docker e fica preso a `127.0.0.1` por padrao, sem abrir acesso publico automaticamente.
 
+Se depois quiser publicar o painel com seguranca:
+
+1. Abra `GERENCIAR PAINEL WEB DE BANCOS`
+2. Escolha `Publicar painel via Nginx + login`
+3. Informe dominio, nome do site e credenciais de acesso
+4. Depois escolha `Ativar HTTPS no painel`
+5. Informe o mesmo dominio e um e-mail valido do Let's Encrypt
+
+Esse fluxo cria um virtual host Nginx com autenticacao basica na frente do painel, e depois permite emitir certificado HTTPS para o dominio informado.
+
 Dentro das ferramentas, para conectar nos bancos da propria maquina, use:
 
 ```text
@@ -261,6 +271,7 @@ Recomendacoes de seguranca:
 - nao abra a porta do painel para toda a internet
 - se precisar acesso remoto, libere a porta apenas para o seu IP
 - se quiser publicar com dominio, coloque o painel atras de Nginx + HTTPS
+- se publicar com dominio, mantenha o login extra do Nginx ativado
 - o painel nao substitui o banco principal; ele apenas ajuda a administrar
 
 ### 7. Alterar idioma

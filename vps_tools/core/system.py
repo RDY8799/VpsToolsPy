@@ -701,6 +701,18 @@ class SystemActions:
         }
 
     @staticmethod
+    def _openssl_apr1_hash(password: str):
+        result = subprocess.run(
+            ["openssl", "passwd", "-apr1", password],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return False, (result.stderr or result.stdout or "").strip()
+        return True, result.stdout.strip()
+
+    @staticmethod
     def write_environment_file(path: str, env_vars: dict[str, str], owner_user: str = ""):
         ok, msg = SystemActions._write_text_file(path, SystemActions._env_file_content(env_vars), mode=0o600)
         if not ok:
@@ -1659,6 +1671,11 @@ class SystemActions:
                 progress_callback(completed=percent, description=f"[cyan]{text}[/cyan]")
 
         try:
+            if SystemActions._package_manager() != "apt":
+                return False, SystemActions._txt(
+                    "Publicacao automatica do painel disponivel apenas para Debian/Ubuntu.",
+                    "Automatic panel publishing is available only on Debian/Ubuntu.",
+                )
             ok, msg = SystemActions._validate_service_name(site_name)
             if not ok:
                 return False, msg
@@ -2085,6 +2102,145 @@ class SystemActions:
             return ok, output or SystemActions._txt("Acao concluida.", "Action completed.")
         except Exception as exc:
             return False, str(exc)
+
+    @staticmethod
+    def publish_web_db_panel_via_nginx(
+        app_dir: str = "/opt/vps-tools-db-panel",
+        site_name: str = "db-panel",
+        server_names: list[str] | None = None,
+        auth_user: str = "admin",
+        auth_password: str = "",
+        progress_callback=None,
+    ):
+        def update(percent: int, text: str):
+            if progress_callback:
+                progress_callback(completed=percent, description=f"[cyan]{text}[/cyan]")
+
+        try:
+            ok, msg = SystemActions._validate_service_name(site_name)
+            if not ok:
+                return False, msg
+            server_names = [item.strip() for item in (server_names or []) if item.strip()]
+            if not server_names:
+                return False, SystemActions._txt(
+                    "Informe ao menos um dominio/server_name para o painel.",
+                    "Provide at least one domain/server_name for the panel.",
+                )
+            if not auth_user.strip():
+                return False, SystemActions._txt(
+                    "Usuario do painel nao pode ser vazio.",
+                    "Panel username cannot be empty.",
+                )
+            if not auth_password:
+                auth_password = SystemActions._random_secret(18)
+
+            status = SystemActions.web_db_panel_status(app_dir=app_dir)
+            if not status.get("installed") or not status.get("panel_port"):
+                return False, SystemActions._txt(
+                    "Painel web nao instalado ou sem porta detectada.",
+                    "Web panel is not installed or has no detected port.",
+                )
+            panel_port = int(status["panel_port"])
+
+            update(10, SystemActions._txt("Instalando Nginx e OpenSSL", "Installing Nginx and OpenSSL"))
+            result = subprocess.run(["apt-get", "update", "-y"], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha no apt-get update.",
+                    "apt-get update failed.",
+                )
+            result = subprocess.run(["apt-get", "install", "-y", "nginx", "openssl"], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha na instalacao do Nginx/OpenSSL.",
+                    "Nginx/OpenSSL installation failed.",
+                )
+
+            update(35, SystemActions._txt("Gerando arquivo de autenticacao", "Generating authentication file"))
+            ok, hashed = SystemActions._openssl_apr1_hash(auth_password)
+            if not ok:
+                return False, hashed
+            htpasswd_path = f"/etc/nginx/.htpasswd-{site_name}"
+            ok, msg = SystemActions._write_text_file(htpasswd_path, f"{auth_user}:{hashed}\n", mode=0o640)
+            if not ok:
+                return False, msg
+
+            server_name_line = " ".join(server_names)
+            conf_content = (
+                "server {\n"
+                "    listen 80;\n"
+                "    listen [::]:80;\n"
+                f"    server_name {server_name_line};\n"
+                "\n"
+                '    auth_basic "Restricted Area";\n'
+                f"    auth_basic_user_file {htpasswd_path};\n"
+                "\n"
+                "    location / {\n"
+                f"        proxy_pass http://127.0.0.1:{panel_port}/;\n"
+                "        proxy_http_version 1.1;\n"
+                "        proxy_set_header Host $host;\n"
+                "        proxy_set_header Upgrade $http_upgrade;\n"
+                '        proxy_set_header Connection "upgrade";\n'
+                "        proxy_set_header X-Real-IP $remote_addr;\n"
+                "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
+                "        proxy_set_header X-Forwarded-Proto $scheme;\n"
+                "    }\n"
+                "}\n"
+            )
+
+            update(60, SystemActions._txt("Gravando virtual host do painel", "Writing panel virtual host"))
+            available = f"/etc/nginx/sites-available/{site_name}"
+            enabled = f"/etc/nginx/sites-enabled/{site_name}"
+            ok, msg = SystemActions._write_text_file(available, conf_content)
+            if not ok:
+                return False, msg
+            if not os.path.exists(enabled):
+                os.symlink(available, enabled)
+
+            update(80, SystemActions._txt("Validando e reiniciando Nginx", "Validating and restarting Nginx"))
+            result = subprocess.run(["nginx", "-t"], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha no nginx -t.",
+                    "nginx -t failed.",
+                )
+            for cmd in (["systemctl", "enable", "nginx"], ["systemctl", "restart", "nginx"]):
+                result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                if result.returncode != 0:
+                    return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                        f"Falha ao executar: {' '.join(cmd)}",
+                        f"Failed to execute: {' '.join(cmd)}",
+                    )
+
+            status_result = subprocess.run(["systemctl", "status", "nginx", "--no-pager"], capture_output=True, text=True, check=False)
+            update(100, SystemActions._txt("Painel publicado via Nginx", "Panel published via Nginx"))
+            return True, {
+                "site_name": site_name,
+                "server_names": server_name_line,
+                "config_file": available,
+                "htpasswd_file": htpasswd_path,
+                "auth_user": auth_user,
+                "auth_password": auth_password,
+                "published_url": f"http://{server_names[0]}/",
+                "panel_port": panel_port,
+                "nginx_status": (status_result.stdout or status_result.stderr or "").strip(),
+            }
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def secure_web_db_panel_https(
+        domains: list[str],
+        email: str,
+        redirect_https: bool = True,
+        progress_callback=None,
+    ):
+        return SystemActions.setup_certbot_https(
+            domains=domains,
+            email=email,
+            redirect_https=redirect_https,
+            progress_callback=progress_callback,
+        )
 
     @staticmethod
     def restart_service_with_fallback(*service_names):
