@@ -10,6 +10,8 @@ import time
 import psutil
 import requests
 
+from vps_tools.core.i18n import LanguageManager
+
 
 class SystemInfo:
     @staticmethod
@@ -60,6 +62,16 @@ class SystemInfo:
 
 
 class SystemActions:
+    _i18n = LanguageManager("pt")
+
+    @staticmethod
+    def set_language(lang: str):
+        SystemActions._i18n.set_language(lang)
+
+    @staticmethod
+    def _txt(pt: str, en: str) -> str:
+        return SystemActions._i18n.t_pair(pt, en)
+
     @staticmethod
     def _package_manager() -> str:
         if os.path.exists('/usr/bin/apt-get') or os.path.exists('/bin/apt-get'):
@@ -89,9 +101,12 @@ class SystemActions:
     @staticmethod
     def _validate_pg_identifier(value: str, label: str):
         if not value:
-            return False, f"{label} nao pode ser vazio."
+            return False, SystemActions._txt(f"{label} nao pode ser vazio.", f"{label} cannot be empty.")
         if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", value):
-            return False, f"{label} invalido. Use apenas letras, numeros e underscore, iniciando com letra ou underscore."
+            return False, SystemActions._txt(
+                f"{label} invalido. Use apenas letras, numeros e underscore, iniciando com letra ou underscore.",
+                f"Invalid {label}. Use only letters, numbers, and underscores, starting with a letter or underscore.",
+            )
         return True, ""
 
     @staticmethod
@@ -124,7 +139,12 @@ class SystemActions:
             joined = " ".join(shlex.quote(part) for part in command)
             cmd = ["su", "-", "postgres", "-c", joined]
         else:
-            raise RuntimeError("Nao foi possivel localizar runuser/su para executar comandos como postgres.")
+            raise RuntimeError(
+                SystemActions._txt(
+                    "Nao foi possivel localizar runuser/su para executar comandos como postgres.",
+                    "Could not find runuser/su to execute commands as postgres.",
+                )
+            )
         return subprocess.run(cmd, capture_output=capture_output, text=text, check=False)
 
     @staticmethod
@@ -152,7 +172,10 @@ class SystemActions:
     @staticmethod
     def _replace_or_append_setting(conf_path: str, key: str, value: str):
         if not os.path.exists(conf_path):
-            return False, f"Arquivo de configuracao nao encontrado: {conf_path}"
+            return False, SystemActions._txt(
+                f"Arquivo de configuracao nao encontrado: {conf_path}",
+                f"Configuration file not found: {conf_path}",
+            )
 
         try:
             with open(conf_path, "r", encoding="utf-8") as f:
@@ -160,10 +183,37 @@ class SystemActions:
         except Exception as exc:
             return False, str(exc)
 
+        pattern = re.compile(rf"^\s*#?\s*{re.escape(key)}\s*=")
+        new_line = f"{key} = {value}\n"
+        replaced = False
+        output = []
+
+        for line in lines:
+            if pattern.match(line) and not replaced:
+                output.append(new_line)
+                replaced = True
+            else:
+                output.append(line)
+
+        if not replaced:
+            if output and not output[-1].endswith("\n"):
+                output[-1] += "\n"
+            output.append(new_line)
+
+        try:
+            with open(conf_path, "w", encoding="utf-8") as f:
+                f.writelines(output)
+            return True, conf_path
+        except Exception as exc:
+            return False, str(exc)
+
     @staticmethod
     def _replace_or_append_plain_setting(conf_path: str, key: str, value: str):
         if not os.path.exists(conf_path):
-            return False, f"Arquivo de configuracao nao encontrado: {conf_path}"
+            return False, SystemActions._txt(
+                f"Arquivo de configuracao nao encontrado: {conf_path}",
+                f"Configuration file not found: {conf_path}",
+            )
         try:
             with open(conf_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
@@ -194,7 +244,10 @@ class SystemActions:
     @staticmethod
     def _set_mongod_config(conf_path: str, bind_ip: str, port: int, auth_enabled: bool):
         if not os.path.exists(conf_path):
-            return False, f"Arquivo de configuracao nao encontrado: {conf_path}"
+            return False, SystemActions._txt(
+                f"Arquivo de configuracao nao encontrado: {conf_path}",
+                f"Configuration file not found: {conf_path}",
+            )
         try:
             with open(conf_path, "r", encoding="utf-8") as f:
                 content = f.read()
@@ -250,9 +303,12 @@ class SystemActions:
     @staticmethod
     def _validate_service_name(value: str):
         if not value:
-            return False, "Nome do servico nao pode ser vazio."
+            return False, SystemActions._txt("Nome do servico nao pode ser vazio.", "Service name cannot be empty.")
         if not re.match(r"^[A-Za-z0-9_.@-]+$", value):
-            return False, "Nome do servico invalido. Use apenas letras, numeros, ponto, underscore, @ ou -."
+            return False, SystemActions._txt(
+                "Nome do servico invalido. Use apenas letras, numeros, ponto, underscore, @ ou -.",
+                "Invalid service name. Use only letters, numbers, dot, underscore, @, or -.",
+            )
         return True, ""
 
     @staticmethod
@@ -271,7 +327,10 @@ class SystemActions:
         if owner_user and SystemActions._linux_user_exists(owner_user):
             result = subprocess.run(["chown", f"{owner_user}:{owner_user}", path], capture_output=True, text=True, check=False)
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or f"Falha ao ajustar dono de {path}."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    f"Falha ao ajustar dono de {path}.",
+                    f"Failed to change owner of {path}.",
+                )
         return True, path
 
     @staticmethod
@@ -293,14 +352,14 @@ class SystemActions:
 
         try:
             if os.name == "nt":
-                return False, "systemd nao suportado no Windows."
+                return False, SystemActions._txt("systemd nao suportado no Windows.", "systemd is not supported on Windows.")
             ok, msg = SystemActions._validate_service_name(service_name)
             if not ok:
                 return False, msg
             if not exec_start.strip():
-                return False, "ExecStart nao pode ser vazio."
+                return False, SystemActions._txt("ExecStart nao pode ser vazio.", "ExecStart cannot be empty.")
             if not working_dir.startswith("/"):
-                return False, "WorkingDirectory deve ser absoluto."
+                return False, SystemActions._txt("WorkingDirectory deve ser absoluto.", "WorkingDirectory must be an absolute path.")
 
             run_user = SystemActions._resolve_linux_owner(run_user or "root")
             unit_path = f"/etc/systemd/system/{service_name}.service"
@@ -335,12 +394,12 @@ class SystemActions:
                 ]
             )
 
-            update(15, "Gravando unit file")
+            update(15, SystemActions._txt("Gravando unit file", "Writing unit file"))
             ok, msg = SystemActions._write_text_file(unit_path, "\n".join(lines))
             if not ok:
                 return False, msg
 
-            update(45, "Recarregando systemd")
+            update(45, SystemActions._txt("Recarregando systemd", "Reloading systemd"))
             for cmd in (
                 ["systemctl", "daemon-reload"],
                 ["systemctl", "enable", service_name],
@@ -348,16 +407,19 @@ class SystemActions:
             ):
                 result = subprocess.run(cmd, capture_output=True, text=True, check=False)
                 if result.returncode != 0:
-                    return False, result.stderr.strip() or result.stdout.strip() or f"Falha ao executar: {' '.join(cmd)}"
+                    return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                        f"Falha ao executar: {' '.join(cmd)}",
+                        f"Failed to execute: {' '.join(cmd)}",
+                    )
 
-            update(80, "Coletando status do servico")
+            update(80, SystemActions._txt("Coletando status do servico", "Collecting service status"))
             status_result = subprocess.run(
                 ["systemctl", "status", service_name, "--no-pager"],
                 capture_output=True,
                 text=True,
                 check=False,
             )
-            update(100, "Servico criado")
+            update(100, SystemActions._txt("Servico criado", "Service created"))
             return True, {
                 "service_name": service_name,
                 "unit_path": unit_path,
@@ -377,7 +439,7 @@ class SystemActions:
             if not ok:
                 return False, msg
             if action not in {"start", "stop", "restart", "status", "enable", "disable", "logs"}:
-                return False, f"Acao systemd invalida: {action}"
+                return False, SystemActions._txt(f"Acao systemd invalida: {action}", f"Invalid systemd action: {action}")
 
             if action == "logs":
                 result = subprocess.run(
@@ -408,30 +470,6 @@ class SystemActions:
         except Exception as exc:
             return False, str(exc)
 
-        pattern = re.compile(rf"^\s*#?\s*{re.escape(key)}\s*=")
-        new_line = f"{key} = {value}\n"
-        replaced = False
-        output = []
-
-        for line in lines:
-            if pattern.match(line) and not replaced:
-                output.append(new_line)
-                replaced = True
-            else:
-                output.append(line)
-
-        if not replaced:
-            if output and not output[-1].endswith("\n"):
-                output[-1] += "\n"
-            output.append(new_line)
-
-        try:
-            with open(conf_path, "w", encoding="utf-8") as f:
-                f.writelines(output)
-            return True, conf_path
-        except Exception as exc:
-            return False, str(exc)
-
     @staticmethod
     def install_local_postgresql(
         db_name: str = "hospital",
@@ -447,33 +485,51 @@ class SystemActions:
                 progress_callback(completed=percent, description=f"[cyan]{text}[/cyan]")
         try:
             if os.name == "nt":
-                return False, "Instalacao do PostgreSQL local nao suportada no Windows."
+                return False, SystemActions._txt(
+                    "Instalacao do PostgreSQL local nao suportada no Windows.",
+                    "Local PostgreSQL installation is not supported on Windows.",
+                )
 
             manager = SystemActions._package_manager()
             if manager != "apt":
-                return False, "Provisionamento automatico do PostgreSQL disponivel apenas para Debian/Ubuntu."
+                return False, SystemActions._txt(
+                    "Provisionamento automatico do PostgreSQL disponivel apenas para Debian/Ubuntu.",
+                    "Automatic PostgreSQL provisioning is available only on Debian/Ubuntu.",
+                )
 
-            ok, msg = SystemActions._validate_pg_identifier(db_name, "Nome do banco")
+            ok, msg = SystemActions._validate_pg_identifier(
+                db_name,
+                SystemActions._txt("Nome do banco", "Database name"),
+            )
             if not ok:
                 return False, msg
-            ok, msg = SystemActions._validate_pg_identifier(db_user, "Nome do usuario")
+            ok, msg = SystemActions._validate_pg_identifier(
+                db_user,
+                SystemActions._txt("Nome do usuario", "Username"),
+            )
             if not ok:
                 return False, msg
             if not db_password:
-                return False, "Senha do usuario do banco nao pode ser vazia."
+                return False, SystemActions._txt(
+                    "Senha do usuario do banco nao pode ser vazia.",
+                    "Database user password cannot be empty.",
+                )
             if not (listen_addresses or "").strip():
-                return False, "listen_addresses nao pode ser vazio."
+                return False, SystemActions._txt("listen_addresses nao pode ser vazio.", "listen_addresses cannot be empty.")
             if not (jdbc_host or "").strip():
-                return False, "Host JDBC nao pode ser vazio."
+                return False, SystemActions._txt("Host JDBC nao pode ser vazio.", "JDBC host cannot be empty.")
             if not isinstance(jdbc_port, int) or not (1 <= jdbc_port <= 65535):
-                return False, "Porta JDBC invalida."
+                return False, SystemActions._txt("Porta JDBC invalida.", "Invalid JDBC port.")
 
-            update(5, "Atualizando cache de pacotes")
+            update(5, SystemActions._txt("Atualizando cache de pacotes", "Updating package cache"))
             result = subprocess.run(["apt-get", "update", "-y"], capture_output=True, text=True, check=False)
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or "Falha no apt-get update."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha no apt-get update.",
+                    "apt-get update failed.",
+                )
 
-            update(20, "Instalando PostgreSQL")
+            update(20, SystemActions._txt("Instalando PostgreSQL", "Installing PostgreSQL"))
             result = subprocess.run(
                 ["apt-get", "install", "-y", "postgresql", "postgresql-contrib"],
                 capture_output=True,
@@ -481,18 +537,27 @@ class SystemActions:
                 check=False,
             )
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or "Falha na instalacao do PostgreSQL."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha na instalacao do PostgreSQL.",
+                    "PostgreSQL installation failed.",
+                )
 
-            update(40, "Habilitando e iniciando o servico")
+            update(40, SystemActions._txt("Habilitando e iniciando o servico", "Enabling and starting the service"))
             for cmd in (["systemctl", "enable", "postgresql"], ["systemctl", "start", "postgresql"]):
                 result = subprocess.run(cmd, capture_output=True, text=True, check=False)
                 if result.returncode != 0:
-                    return False, result.stderr.strip() or result.stdout.strip() or f"Falha ao executar: {' '.join(cmd)}"
+                    return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                        f"Falha ao executar: {' '.join(cmd)}",
+                        f"Failed to execute: {' '.join(cmd)}",
+                    )
 
-            update(55, "Aplicando listen_addresses do PostgreSQL")
+            update(55, SystemActions._txt("Aplicando listen_addresses do PostgreSQL", "Applying PostgreSQL listen_addresses"))
             conf_path = SystemActions._find_postgresql_conf()
             if not conf_path:
-                return False, "Arquivo postgresql.conf nao encontrado em /etc/postgresql."
+                return False, SystemActions._txt(
+                    "Arquivo postgresql.conf nao encontrado em /etc/postgresql.",
+                    "postgresql.conf file not found in /etc/postgresql.",
+                )
             pg_listen_addresses = listen_addresses.replace("'", "''")
             ok, msg = SystemActions._replace_or_append_setting(conf_path, "listen_addresses", f"'{pg_listen_addresses}'")
             if not ok:
@@ -500,7 +565,10 @@ class SystemActions:
 
             result = subprocess.run(["systemctl", "restart", "postgresql"], capture_output=True, text=True, check=False)
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or "Falha ao reiniciar o PostgreSQL."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha ao reiniciar o PostgreSQL.",
+                    "Failed to restart PostgreSQL.",
+                )
 
             password_sql = db_password.replace("'", "''")
             role_sql = (
@@ -512,25 +580,34 @@ class SystemActions:
                 "END $$;"
             )
 
-            update(70, "Criando ou atualizando usuario do banco")
+            update(70, SystemActions._txt("Criando ou atualizando usuario do banco", "Creating or updating database user"))
             result = SystemActions._run_as_postgres(
                 ["psql", "-v", "ON_ERROR_STOP=1", "-d", "postgres", "-c", role_sql]
             )
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or "Falha ao criar/atualizar usuario do PostgreSQL."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha ao criar/atualizar usuario do PostgreSQL.",
+                    "Failed to create/update PostgreSQL user.",
+                )
 
-            update(80, "Criando ou ajustando banco de dados")
+            update(80, SystemActions._txt("Criando ou ajustando banco de dados", "Creating or adjusting database"))
             exists = SystemActions._run_as_postgres(
                 ["psql", "-tAc", f"SELECT 1 FROM pg_database WHERE datname = '{db_name}'"]
             )
             if exists.returncode != 0:
-                return False, exists.stderr.strip() or exists.stdout.strip() or "Falha ao verificar existencia do banco."
+                return False, exists.stderr.strip() or exists.stdout.strip() or SystemActions._txt(
+                    "Falha ao verificar existencia do banco.",
+                    "Failed to check whether the database exists.",
+                )
             if exists.stdout.strip() != "1":
                 create_db = SystemActions._run_as_postgres(
                     ["psql", "-v", "ON_ERROR_STOP=1", "-d", "postgres", "-c", f"CREATE DATABASE {db_name} OWNER {db_user};"]
                 )
                 if create_db.returncode != 0:
-                    return False, create_db.stderr.strip() or create_db.stdout.strip() or "Falha ao criar banco de dados."
+                    return False, create_db.stderr.strip() or create_db.stdout.strip() or SystemActions._txt(
+                        "Falha ao criar banco de dados.",
+                        "Failed to create database.",
+                    )
 
             grant_sql = (
                 f"ALTER DATABASE {db_name} OWNER TO {db_user}; "
@@ -540,7 +617,10 @@ class SystemActions:
                 ["psql", "-v", "ON_ERROR_STOP=1", "-d", "postgres", "-c", grant_sql]
             )
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or "Falha ao conceder privilegios no banco."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha ao conceder privilegios no banco.",
+                    "Failed to grant database privileges.",
+                )
 
             schema_sql = (
                 f"ALTER SCHEMA public OWNER TO {db_user}; "
@@ -550,12 +630,18 @@ class SystemActions:
                 ["psql", "-v", "ON_ERROR_STOP=1", "-d", db_name, "-c", schema_sql]
             )
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or "Falha ao ajustar o schema public."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha ao ajustar o schema public.",
+                    "Failed to adjust the public schema.",
+                )
 
-            update(90, "Coletando status final")
+            update(90, SystemActions._txt("Coletando status final", "Collecting final status"))
             test_result = SystemActions._run_as_postgres(["psql", "-d", db_name, "-c", "\\l"])
             if test_result.returncode != 0:
-                return False, test_result.stderr.strip() or test_result.stdout.strip() or "Falha no teste final do banco."
+                return False, test_result.stderr.strip() or test_result.stdout.strip() or SystemActions._txt(
+                    "Falha no teste final do banco.",
+                    "Final database test failed.",
+                )
 
             status_result = subprocess.run(
                 ["systemctl", "status", "postgresql", "--no-pager"],
@@ -565,7 +651,7 @@ class SystemActions:
             )
 
             os_release = SystemActions._read_os_release()
-            update(100, "Provisionamento concluido")
+            update(100, SystemActions._txt("Provisionamento concluido", "Provisioning completed"))
             return True, {
                 "db_name": db_name,
                 "db_user": db_user,
@@ -606,29 +692,35 @@ class SystemActions:
 
         try:
             if os.name == "nt":
-                return False, "Preparo do backend Spring Boot nao suportado no Windows."
+                return False, SystemActions._txt(
+                    "Preparo do backend Spring Boot nao suportado no Windows.",
+                    "Spring Boot backend preparation is not supported on Windows.",
+                )
 
             manager = SystemActions._package_manager()
             if manager != "apt":
-                return False, "Preparacao automatica do backend disponivel apenas para Debian/Ubuntu."
+                return False, SystemActions._txt(
+                    "Preparacao automatica do backend disponivel apenas para Debian/Ubuntu.",
+                    "Automatic backend preparation is available only on Debian/Ubuntu.",
+                )
 
             if not app_dir.startswith("/"):
-                return False, "Diretorio da aplicacao deve ser absoluto."
+                return False, SystemActions._txt("Diretorio da aplicacao deve ser absoluto.", "Application directory must be absolute.")
             if repo_url and not repo_dir.startswith("/"):
-                return False, "Diretorio do repositorio deve ser absoluto."
+                return False, SystemActions._txt("Diretorio do repositorio deve ser absoluto.", "Repository directory must be absolute.")
             if not jar_name or "/" in jar_name or "\\" in jar_name:
-                return False, "Nome do JAR invalido."
+                return False, SystemActions._txt("Nome do JAR invalido.", "Invalid JAR filename.")
             if not isinstance(app_port, int) or not (1 <= app_port <= 65535):
-                return False, "Porta da aplicacao invalida."
+                return False, SystemActions._txt("Porta da aplicacao invalida.", "Invalid application port.")
 
             app_owner = SystemActions._resolve_linux_owner(owner_user)
 
-            update(5, "Atualizando cache de pacotes")
+            update(5, SystemActions._txt("Atualizando cache de pacotes", "Updating package cache"))
             result = subprocess.run(["apt-get", "update", "-y"], capture_output=True, text=True, check=False)
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or "Falha no apt-get update."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt("Falha no apt-get update.", "apt-get update failed.")
 
-            update(20, "Instalando Java 17")
+            update(20, SystemActions._txt("Instalando Java 17", "Installing Java 17"))
             result = subprocess.run(
                 ["apt-get", "install", "-y", "openjdk-17-jre-headless"],
                 capture_output=True,
@@ -636,48 +728,78 @@ class SystemActions:
                 check=False,
             )
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or "Falha na instalacao do Java 17."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha na instalacao do Java 17.",
+                    "Java 17 installation failed.",
+                )
 
             if repo_url:
-                update(35, "Instalando git")
+                update(35, SystemActions._txt("Instalando git", "Installing git"))
                 result = subprocess.run(["apt-get", "install", "-y", "git"], capture_output=True, text=True, check=False)
                 if result.returncode != 0:
-                    return False, result.stderr.strip() or result.stdout.strip() or "Falha na instalacao do git."
+                    return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt("Falha na instalacao do git.", "Git installation failed.")
 
-            update(50, "Criando pasta da aplicacao")
+            update(50, SystemActions._txt("Criando pasta da aplicacao", "Creating application directory"))
             result = subprocess.run(["mkdir", "-p", app_dir], capture_output=True, text=True, check=False)
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or f"Falha ao criar {app_dir}."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    f"Falha ao criar {app_dir}.",
+                    f"Failed to create {app_dir}.",
+                )
 
             result = subprocess.run(["chown", "-R", f"{app_owner}:{app_owner}", app_dir], capture_output=True, text=True, check=False)
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or f"Falha ao ajustar dono de {app_dir}."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    f"Falha ao ajustar dono de {app_dir}.",
+                    f"Failed to change owner of {app_dir}.",
+                )
 
             repo_status = ""
             if repo_url:
-                update(70, "Preparando repositorio do backend")
+                update(70, SystemActions._txt("Preparando repositorio do backend", "Preparing backend repository"))
                 if os.path.isdir(os.path.join(repo_dir, ".git")):
                     result = subprocess.run(["git", "-C", repo_dir, "pull", "--ff-only"], capture_output=True, text=True, check=False)
                     if result.returncode != 0:
-                        return False, result.stderr.strip() or result.stdout.strip() or "Falha no git pull do backend."
-                    repo_status = (result.stdout or result.stderr or "").strip() or "Repositorio atualizado."
+                        return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                            "Falha no git pull do backend.",
+                            "Backend git pull failed.",
+                        )
+                    repo_status = (result.stdout or result.stderr or "").strip() or SystemActions._txt(
+                        "Repositorio atualizado.",
+                        "Repository updated.",
+                    )
                 else:
                     if os.path.exists(repo_dir) and os.listdir(repo_dir):
-                        return False, f"Diretorio do repositorio ja existe e nao esta vazio: {repo_dir}"
+                        return False, SystemActions._txt(
+                            f"Diretorio do repositorio ja existe e nao esta vazio: {repo_dir}",
+                            f"Repository directory already exists and is not empty: {repo_dir}",
+                        )
                     result = subprocess.run(["git", "clone", repo_url, repo_dir], capture_output=True, text=True, check=False)
                     if result.returncode != 0:
-                        return False, result.stderr.strip() or result.stdout.strip() or "Falha no git clone do backend."
-                    repo_status = (result.stdout or result.stderr or "").strip() or "Repositorio clonado."
+                        return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                            "Falha no git clone do backend.",
+                            "Backend git clone failed.",
+                        )
+                    repo_status = (result.stdout or result.stderr or "").strip() or SystemActions._txt(
+                        "Repositorio clonado.",
+                        "Repository cloned.",
+                    )
 
                 result = subprocess.run(["chown", "-R", f"{app_owner}:{app_owner}", repo_dir], capture_output=True, text=True, check=False)
                 if result.returncode != 0:
-                    return False, result.stderr.strip() or result.stdout.strip() or f"Falha ao ajustar dono de {repo_dir}."
+                    return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                        f"Falha ao ajustar dono de {repo_dir}.",
+                        f"Failed to change owner of {repo_dir}.",
+                    )
 
-            update(85, "Coletando versoes e proximos passos")
+            update(85, SystemActions._txt("Coletando versoes e proximos passos", "Collecting versions and next steps"))
             java_result = subprocess.run(["java", "-version"], capture_output=True, text=True, check=False)
             java_version = (java_result.stderr or java_result.stdout or "").strip()
             if java_result.returncode != 0:
-                return False, java_version or "Falha ao validar java -version."
+                return False, java_version or SystemActions._txt(
+                    "Falha ao validar java -version.",
+                    "Failed to validate java -version.",
+                )
 
             jar_target = os.path.join(app_dir, jar_name).replace("\\", "/")
             env_exports = "\n".join(
@@ -701,7 +823,7 @@ class SystemActions:
                 f"{jar_run_command}"
             ) if repo_url else ""
 
-            update(100, "Preparacao concluida")
+            update(100, SystemActions._txt("Preparacao concluida", "Preparation completed"))
             return True, {
                 "os_info": SystemInfo.get_os_info(),
                 "is_ubuntu": SystemActions._read_os_release().get("ID", "").lower() == "ubuntu",
@@ -719,10 +841,16 @@ class SystemActions:
                 "build_commands": build_commands,
                 "health_check_command": health_check_command,
                 "security_group_notes": [
-                    "continue com 22 so para seu IP",
-                    f"abra {app_port} temporariamente so para seu IP, se quiser testar no navegador",
-                    "nao abra 5432",
-                    "nao abra 80/443 ate concluir a instalacao do backend",
+                    SystemActions._txt("continue com 22 so para seu IP", "keep port 22 open only to your IP"),
+                    SystemActions._txt(
+                        f"abra {app_port} temporariamente so para seu IP, se quiser testar no navegador",
+                        f"open port {app_port} temporarily only to your IP if you want to test in the browser",
+                    ),
+                    SystemActions._txt("nao abra 5432", "do not open port 5432"),
+                    SystemActions._txt(
+                        "nao abra 80/443 ate concluir a instalacao do backend",
+                        "do not open 80/443 until the backend installation is complete",
+                    ),
                 ],
             }
         except Exception as exc:
@@ -745,38 +873,62 @@ class SystemActions:
 
         try:
             if os.name == "nt":
-                return False, "Instalacao de banco nao suportada no Windows."
+                return False, SystemActions._txt(
+                    "Instalacao de banco nao suportada no Windows.",
+                    "Database installation is not supported on Windows.",
+                )
             if SystemActions._package_manager() != "apt":
-                return False, "Instalacao automatica disponivel apenas para Debian/Ubuntu."
+                return False, SystemActions._txt(
+                    "Instalacao automatica disponivel apenas para Debian/Ubuntu.",
+                    "Automatic installation is available only on Debian/Ubuntu.",
+                )
             if flavor not in {"mysql", "mariadb"}:
-                return False, f"Sabor de banco invalido: {flavor}"
-            ok, msg = SystemActions._validate_pg_identifier(db_name, "Nome do banco")
+                return False, SystemActions._txt(
+                    f"Sabor de banco invalido: {flavor}",
+                    f"Invalid database flavor: {flavor}",
+                )
+            ok, msg = SystemActions._validate_pg_identifier(
+                db_name,
+                SystemActions._txt("Nome do banco", "Database name"),
+            )
             if not ok:
                 return False, msg
-            ok, msg = SystemActions._validate_pg_identifier(db_user, "Nome do usuario")
+            ok, msg = SystemActions._validate_pg_identifier(
+                db_user,
+                SystemActions._txt("Nome do usuario", "Username"),
+            )
             if not ok:
                 return False, msg
             if not db_password:
-                return False, "Senha do banco nao pode ser vazia."
+                return False, SystemActions._txt(
+                    "Senha do banco nao pode ser vazia.",
+                    "Database password cannot be empty.",
+                )
             if not (1 <= port <= 65535):
-                return False, "Porta invalida."
+                return False, SystemActions._txt("Porta invalida.", "Invalid port.")
 
             package_name = "mysql-server" if flavor == "mysql" else "mariadb-server"
             service_name = "mysql" if flavor == "mysql" else "mariadb"
             conf_dir = "/etc/mysql/mysql.conf.d" if flavor == "mysql" else "/etc/mysql/mariadb.conf.d"
             conf_path = os.path.join(conf_dir, "zz-vps-tools.cnf")
 
-            update(5, "Atualizando cache de pacotes")
+            update(5, SystemActions._txt("Atualizando cache de pacotes", "Updating package cache"))
             result = subprocess.run(["apt-get", "update", "-y"], capture_output=True, text=True, check=False)
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or "Falha no apt-get update."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha no apt-get update.",
+                    "apt-get update failed.",
+                )
 
-            update(20, f"Instalando {package_name}")
+            update(20, SystemActions._txt(f"Instalando {package_name}", f"Installing {package_name}"))
             result = subprocess.run(["apt-get", "install", "-y", package_name], capture_output=True, text=True, check=False)
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or f"Falha na instalacao do {package_name}."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    f"Falha na instalacao do {package_name}.",
+                    f"{package_name} installation failed.",
+                )
 
-            update(40, "Aplicando configuracao de bind/porta")
+            update(40, SystemActions._txt("Aplicando configuracao de bind/porta", "Applying bind/port configuration"))
             conf_content = (
                 "[mysqld]\n"
                 f"bind-address = {bind_address}\n"
@@ -789,7 +941,10 @@ class SystemActions:
             for cmd in (["systemctl", "enable", service_name], ["systemctl", "restart", service_name]):
                 result = subprocess.run(cmd, capture_output=True, text=True, check=False)
                 if result.returncode != 0:
-                    return False, result.stderr.strip() or result.stdout.strip() or f"Falha ao executar: {' '.join(cmd)}"
+                    return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                        f"Falha ao executar: {' '.join(cmd)}",
+                        f"Failed to execute: {' '.join(cmd)}",
+                    )
 
             password_sql = db_password.replace("'", "''")
             grant_host_sql = grant_host.replace("'", "''")
@@ -801,10 +956,13 @@ class SystemActions:
                 "FLUSH PRIVILEGES;"
             )
 
-            update(65, "Criando banco e usuario")
+            update(65, SystemActions._txt("Criando banco e usuario", "Creating database and user"))
             result = subprocess.run(["mysql", "-e", sql], capture_output=True, text=True, check=False)
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or "Falha ao criar banco/usuario."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha ao criar banco/usuario.",
+                    "Failed to create database/user.",
+                )
 
             status_result = subprocess.run(
                 ["systemctl", "status", service_name, "--no-pager"],
@@ -813,7 +971,7 @@ class SystemActions:
                 check=False,
             )
             jdbc_scheme = "mysql" if flavor == "mysql" else "mariadb"
-            update(100, "Banco configurado")
+            update(100, SystemActions._txt("Banco configurado", "Database configured"))
             return True, {
                 "flavor": flavor,
                 "service_name": service_name,
@@ -846,30 +1004,55 @@ class SystemActions:
 
         try:
             if os.name == "nt":
-                return False, "Instalacao do MongoDB nao suportada no Windows."
+                return False, SystemActions._txt(
+                    "Instalacao do MongoDB nao suportada no Windows.",
+                    "MongoDB installation is not supported on Windows.",
+                )
             if SystemActions._package_manager() != "apt":
-                return False, "Instalacao automatica disponivel apenas para Debian/Ubuntu."
-            ok, msg = SystemActions._validate_pg_identifier(app_db, "Nome do banco")
+                return False, SystemActions._txt(
+                    "Instalacao automatica disponivel apenas para Debian/Ubuntu.",
+                    "Automatic installation is available only on Debian/Ubuntu.",
+                )
+            ok, msg = SystemActions._validate_pg_identifier(
+                app_db,
+                SystemActions._txt("Nome do banco", "Database name"),
+            )
             if not ok:
                 return False, msg
-            ok, msg = SystemActions._validate_pg_identifier(app_user, "Nome do usuario")
+            ok, msg = SystemActions._validate_pg_identifier(
+                app_user,
+                SystemActions._txt("Nome do usuario", "Username"),
+            )
             if not ok:
                 return False, msg
             if not app_password:
-                return False, "Senha do banco nao pode ser vazia."
+                return False, SystemActions._txt(
+                    "Senha do banco nao pode ser vazia.",
+                    "Database password cannot be empty.",
+                )
             codename = SystemActions._ubuntu_codename()
             if codename not in {"focal", "jammy", "noble"}:
-                return False, f"Ubuntu sem suporte oficial configurado para MongoDB 8.0: {codename or 'desconhecido'}"
+                unknown = SystemActions._txt("desconhecido", "unknown")
+                return False, SystemActions._txt(
+                    f"Ubuntu sem suporte oficial configurado para MongoDB 8.0: {codename or unknown}",
+                    f"Ubuntu without configured official support for MongoDB 8.0: {codename or unknown}",
+                )
 
-            update(5, "Instalando dependencias")
+            update(5, SystemActions._txt("Instalando dependencias", "Installing dependencies"))
             result = subprocess.run(["apt-get", "update", "-y"], capture_output=True, text=True, check=False)
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or "Falha no apt-get update."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha no apt-get update.",
+                    "apt-get update failed.",
+                )
             result = subprocess.run(["apt-get", "install", "-y", "gnupg", "curl"], capture_output=True, text=True, check=False)
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or "Falha ao instalar gnupg/curl."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha ao instalar gnupg/curl.",
+                    "Failed to install gnupg/curl.",
+                )
 
-            update(25, "Configurando repositorio oficial do MongoDB")
+            update(25, SystemActions._txt("Configurando repositorio oficial do MongoDB", "Configuring the official MongoDB repository"))
             key_cmd = [
                 "bash",
                 "-lc",
@@ -877,7 +1060,10 @@ class SystemActions:
             ]
             result = subprocess.run(key_cmd, capture_output=True, text=True, check=False)
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or "Falha ao importar chave do MongoDB."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha ao importar chave do MongoDB.",
+                    "Failed to import the MongoDB key.",
+                )
             repo_line = (
                 f"deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] "
                 f"https://repo.mongodb.org/apt/ubuntu {codename}/mongodb-org/8.0 multiverse\n"
@@ -886,15 +1072,21 @@ class SystemActions:
             if not ok:
                 return False, msg
 
-            update(45, "Instalando MongoDB")
+            update(45, SystemActions._txt("Instalando MongoDB", "Installing MongoDB"))
             result = subprocess.run(["apt-get", "update", "-y"], capture_output=True, text=True, check=False)
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or "Falha ao atualizar repositorio MongoDB."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha ao atualizar repositorio MongoDB.",
+                    "Failed to refresh the MongoDB repository.",
+                )
             result = subprocess.run(["apt-get", "install", "-y", "mongodb-org"], capture_output=True, text=True, check=False)
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or "Falha na instalacao do MongoDB."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha na instalacao do MongoDB.",
+                    "MongoDB installation failed.",
+                )
 
-            update(60, "Aplicando bind/auth no mongod.conf")
+            update(60, SystemActions._txt("Aplicando bind/auth no mongod.conf", "Applying bind/auth in mongod.conf"))
             ok, msg = SystemActions._set_mongod_config("/etc/mongod.conf", bind_ip=bind_ip, port=port, auth_enabled=False)
             if not ok:
                 return False, msg
@@ -902,7 +1094,10 @@ class SystemActions:
             for cmd in (["systemctl", "enable", "mongod"], ["systemctl", "restart", "mongod"]):
                 result = subprocess.run(cmd, capture_output=True, text=True, check=False)
                 if result.returncode != 0:
-                    return False, result.stderr.strip() or result.stdout.strip() or f"Falha ao executar: {' '.join(cmd)}"
+                    return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                        f"Falha ao executar: {' '.join(cmd)}",
+                        f"Failed to execute: {' '.join(cmd)}",
+                    )
 
             script = (
                 f"const dbName = {json.dumps(app_db)};"
@@ -914,7 +1109,10 @@ class SystemActions:
             )
             result = subprocess.run(["mongosh", "--quiet", "--eval", script], capture_output=True, text=True, check=False)
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or "Falha ao criar usuario no MongoDB."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha ao criar usuario no MongoDB.",
+                    "Failed to create MongoDB user.",
+                )
 
             if enable_auth:
                 ok, msg = SystemActions._set_mongod_config("/etc/mongod.conf", bind_ip=bind_ip, port=port, auth_enabled=True)
@@ -922,7 +1120,10 @@ class SystemActions:
                     return False, msg
                 result = subprocess.run(["systemctl", "restart", "mongod"], capture_output=True, text=True, check=False)
                 if result.returncode != 0:
-                    return False, result.stderr.strip() or result.stdout.strip() or "Falha ao reiniciar mongod com auth."
+                    return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                        "Falha ao reiniciar mongod com auth.",
+                        "Failed to restart mongod with auth.",
+                    )
 
             status_result = subprocess.run(
                 ["systemctl", "status", "mongod", "--no-pager"],
@@ -930,7 +1131,7 @@ class SystemActions:
                 text=True,
                 check=False,
             )
-            update(100, "MongoDB configurado")
+            update(100, SystemActions._txt("MongoDB configurado", "MongoDB configured"))
             return True, {
                 "db_name": app_db,
                 "db_user": app_user,
@@ -958,21 +1159,33 @@ class SystemActions:
 
         try:
             if os.name == "nt":
-                return False, "Instalacao do Redis nao suportada no Windows."
+                return False, SystemActions._txt(
+                    "Instalacao do Redis nao suportada no Windows.",
+                    "Redis installation is not supported on Windows.",
+                )
             if SystemActions._package_manager() != "apt":
-                return False, "Instalacao automatica disponivel apenas para Debian/Ubuntu."
+                return False, SystemActions._txt(
+                    "Instalacao automatica disponivel apenas para Debian/Ubuntu.",
+                    "Automatic installation is available only on Debian/Ubuntu.",
+                )
             if not (1 <= port <= 65535):
-                return False, "Porta invalida."
+                return False, SystemActions._txt("Porta invalida.", "Invalid port.")
 
-            update(5, "Instalando dependencias")
+            update(5, SystemActions._txt("Instalando dependencias", "Installing dependencies"))
             result = subprocess.run(["apt-get", "update", "-y"], capture_output=True, text=True, check=False)
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or "Falha no apt-get update."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha no apt-get update.",
+                    "apt-get update failed.",
+                )
             result = subprocess.run(["apt-get", "install", "-y", "curl", "gpg"], capture_output=True, text=True, check=False)
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or "Falha ao instalar dependencias do Redis."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha ao instalar dependencias do Redis.",
+                    "Failed to install Redis dependencies.",
+                )
 
-            update(25, "Configurando repositorio oficial do Redis")
+            update(25, SystemActions._txt("Configurando repositorio oficial do Redis", "Configuring the official Redis repository"))
             key_cmd = [
                 "bash",
                 "-lc",
@@ -980,7 +1193,10 @@ class SystemActions:
             ]
             result = subprocess.run(key_cmd, capture_output=True, text=True, check=False)
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or "Falha ao importar chave do Redis."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha ao importar chave do Redis.",
+                    "Failed to import the Redis key.",
+                )
             repo_cmd = [
                 "bash",
                 "-lc",
@@ -989,18 +1205,27 @@ class SystemActions:
             ]
             result = subprocess.run(repo_cmd, capture_output=True, text=True, check=False)
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or "Falha ao criar repositorio do Redis."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha ao criar repositorio do Redis.",
+                    "Failed to create the Redis repository.",
+                )
 
-            update(45, "Instalando Redis")
+            update(45, SystemActions._txt("Instalando Redis", "Installing Redis"))
             result = subprocess.run(["apt-get", "update", "-y"], capture_output=True, text=True, check=False)
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or "Falha ao atualizar repositorio Redis."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha ao atualizar repositorio Redis.",
+                    "Failed to refresh the Redis repository.",
+                )
             result = subprocess.run(["apt-get", "install", "-y", "redis-server"], capture_output=True, text=True, check=False)
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or "Falha na instalacao do Redis."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha na instalacao do Redis.",
+                    "Redis installation failed.",
+                )
 
             conf_path = "/etc/redis/redis.conf"
-            update(65, "Aplicando bind/porta/senha")
+            update(65, SystemActions._txt("Aplicando bind/porta/senha", "Applying bind/port/password"))
             ok, msg = SystemActions._replace_or_append_plain_setting(conf_path, "bind", bind_address)
             if not ok:
                 return False, msg
@@ -1015,7 +1240,10 @@ class SystemActions:
             for cmd in (["systemctl", "enable", "redis-server"], ["systemctl", "restart", "redis-server"]):
                 result = subprocess.run(cmd, capture_output=True, text=True, check=False)
                 if result.returncode != 0:
-                    return False, result.stderr.strip() or result.stdout.strip() or f"Falha ao executar: {' '.join(cmd)}"
+                    return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                        f"Falha ao executar: {' '.join(cmd)}",
+                        f"Failed to execute: {' '.join(cmd)}",
+                    )
 
             status_result = subprocess.run(
                 ["systemctl", "status", "redis-server", "--no-pager"],
@@ -1023,7 +1251,7 @@ class SystemActions:
                 text=True,
                 check=False,
             )
-            update(100, "Redis configurado")
+            update(100, SystemActions._txt("Redis configurado", "Redis configured"))
             return True, {
                 "bind_address": bind_address,
                 "port": port,
@@ -1054,17 +1282,26 @@ class SystemActions:
             if not ok:
                 return False, msg
             if not server_names:
-                return False, "Informe ao menos um dominio/server_name."
+                return False, SystemActions._txt(
+                    "Informe ao menos um dominio/server_name.",
+                    "Provide at least one domain/server_name.",
+                )
             if not (1 <= upstream_port <= 65535):
-                return False, "Porta upstream invalida."
+                return False, SystemActions._txt("Porta upstream invalida.", "Invalid upstream port.")
 
-            update(5, "Instalando Nginx")
+            update(5, SystemActions._txt("Instalando Nginx", "Installing Nginx"))
             result = subprocess.run(["apt-get", "update", "-y"], capture_output=True, text=True, check=False)
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or "Falha no apt-get update."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha no apt-get update.",
+                    "apt-get update failed.",
+                )
             result = subprocess.run(["apt-get", "install", "-y", "nginx"], capture_output=True, text=True, check=False)
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or "Falha na instalacao do Nginx."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha na instalacao do Nginx.",
+                    "Nginx installation failed.",
+                )
 
             server_name_line = " ".join(server_names)
             conf_content = (
@@ -1088,22 +1325,28 @@ class SystemActions:
 
             available = f"/etc/nginx/sites-available/{site_name}"
             enabled = f"/etc/nginx/sites-enabled/{site_name}"
-            update(35, "Gravando virtual host")
+            update(35, SystemActions._txt("Gravando virtual host", "Writing virtual host"))
             ok, msg = SystemActions._write_text_file(available, conf_content)
             if not ok:
                 return False, msg
             if not os.path.exists(enabled):
                 os.symlink(available, enabled)
 
-            update(60, "Validando configuracao do Nginx")
+            update(60, SystemActions._txt("Validando configuracao do Nginx", "Validating Nginx configuration"))
             result = subprocess.run(["nginx", "-t"], capture_output=True, text=True, check=False)
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or "Falha no nginx -t."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha no nginx -t.",
+                    "nginx -t failed.",
+                )
 
             for cmd in (["systemctl", "enable", "nginx"], ["systemctl", "restart", "nginx"]):
                 result = subprocess.run(cmd, capture_output=True, text=True, check=False)
                 if result.returncode != 0:
-                    return False, result.stderr.strip() or result.stdout.strip() or f"Falha ao executar: {' '.join(cmd)}"
+                    return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                        f"Falha ao executar: {' '.join(cmd)}",
+                        f"Failed to execute: {' '.join(cmd)}",
+                    )
 
             status_result = subprocess.run(
                 ["systemctl", "status", "nginx", "--no-pager"],
@@ -1111,7 +1354,7 @@ class SystemActions:
                 text=True,
                 check=False,
             )
-            update(100, "Reverse proxy configurado")
+            update(100, SystemActions._txt("Reverse proxy configurado", "Reverse proxy configured"))
             return True, {
                 "site_name": site_name,
                 "server_names": server_name_line,
@@ -1135,14 +1378,17 @@ class SystemActions:
 
         try:
             if not domains:
-                return False, "Informe ao menos um dominio."
+                return False, SystemActions._txt("Informe ao menos um dominio.", "Provide at least one domain.")
             if not email.strip():
-                return False, "Informe um e-mail valido."
+                return False, SystemActions._txt("Informe um e-mail valido.", "Provide a valid email.")
 
-            update(10, "Instalando Certbot e plugin Nginx")
+            update(10, SystemActions._txt("Instalando Certbot e plugin Nginx", "Installing Certbot and the Nginx plugin"))
             result = subprocess.run(["apt-get", "update", "-y"], capture_output=True, text=True, check=False)
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or "Falha no apt-get update."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha no apt-get update.",
+                    "apt-get update failed.",
+                )
             result = subprocess.run(
                 ["apt-get", "install", "-y", "certbot", "python3-certbot-nginx"],
                 capture_output=True,
@@ -1150,9 +1396,12 @@ class SystemActions:
                 check=False,
             )
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or "Falha na instalacao do Certbot."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha na instalacao do Certbot.",
+                    "Certbot installation failed.",
+                )
 
-            update(45, "Emitindo certificado")
+            update(45, SystemActions._txt("Emitindo certificado", "Issuing certificate"))
             cmd = ["certbot", "--nginx", "--non-interactive", "--agree-tos", "-m", email]
             if redirect_https:
                 cmd.append("--redirect")
@@ -1160,15 +1409,21 @@ class SystemActions:
                 cmd.extend(["-d", domain])
             result = subprocess.run(cmd, capture_output=True, text=True, check=False)
             if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or "Falha ao emitir certificado HTTPS."
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha ao emitir certificado HTTPS.",
+                    "Failed to issue the HTTPS certificate.",
+                )
 
-            update(80, "Validando renovacao")
+            update(80, SystemActions._txt("Validando renovacao", "Validating renewal"))
             renew = subprocess.run(["certbot", "renew", "--dry-run"], capture_output=True, text=True, check=False)
             if renew.returncode != 0:
-                return False, renew.stderr.strip() or renew.stdout.strip() or "Falha no teste de renovacao do Certbot."
+                return False, renew.stderr.strip() or renew.stdout.strip() or SystemActions._txt(
+                    "Falha no teste de renovacao do Certbot.",
+                    "Certbot renewal test failed.",
+                )
 
             timer = subprocess.run(["systemctl", "status", "certbot.timer", "--no-pager"], capture_output=True, text=True, check=False)
-            update(100, "HTTPS configurado")
+            update(100, SystemActions._txt("HTTPS configurado", "HTTPS configured"))
             return True, {
                 "domains": ", ".join(domains),
                 "email": email,
@@ -1226,9 +1481,12 @@ class SystemActions:
     @staticmethod
     def update_script(repo_dir: str):
         if shutil.which('git') is None:
-            return False, "Git nao encontrado no sistema."
+            return False, SystemActions._txt("Git nao encontrado no sistema.", "Git not found on the system.")
         if not os.path.isdir(repo_dir):
-            return False, f"Diretorio do repositorio nao encontrado: {repo_dir}"
+            return False, SystemActions._txt(
+                f"Diretorio do repositorio nao encontrado: {repo_dir}",
+                f"Repository directory not found: {repo_dir}",
+            )
 
         result = subprocess.run(
             ['git', '-C', repo_dir, 'rev-parse', '--is-inside-work-tree'],
@@ -1237,7 +1495,10 @@ class SystemActions:
             check=False,
         )
         if result.returncode != 0:
-            return False, "Diretorio informado nao e um repositorio git."
+            return False, SystemActions._txt(
+                "Diretorio informado nao e um repositorio git.",
+                "The provided directory is not a git repository.",
+            )
 
         fetch = subprocess.run(
             ['git', '-C', repo_dir, 'fetch', '--all'],
@@ -1246,7 +1507,7 @@ class SystemActions:
             check=False,
         )
         if fetch.returncode != 0:
-            return False, fetch.stderr.strip() or "Falha no git fetch."
+            return False, fetch.stderr.strip() or SystemActions._txt("Falha no git fetch.", "git fetch failed.")
 
         pull = subprocess.run(
             ['git', '-C', repo_dir, 'pull', '--ff-only'],
@@ -1255,23 +1516,38 @@ class SystemActions:
             check=False,
         )
         if pull.returncode != 0:
-            return False, pull.stderr.strip() or "Falha no git pull."
-        message = (pull.stdout or "").strip() or "Script atualizado com sucesso."
+            return False, pull.stderr.strip() or SystemActions._txt("Falha no git pull.", "git pull failed.")
+        message = (pull.stdout or "").strip() or SystemActions._txt(
+            "Script atualizado com sucesso.",
+            "Script updated successfully.",
+        )
         return True, message
 
     @staticmethod
     def create_menu_command(repo_dir: str, command_name: str = 'menu'):
         if os.name == 'nt':
-            return False, "Comando global automatico nao suportado no Windows."
+            return False, SystemActions._txt(
+                "Comando global automatico nao suportado no Windows.",
+                "Automatic global command creation is not supported on Windows.",
+            )
         if not os.path.isdir(repo_dir):
-            return False, f"Diretorio do repositorio nao encontrado: {repo_dir}"
+            return False, SystemActions._txt(
+                f"Diretorio do repositorio nao encontrado: {repo_dir}",
+                f"Repository directory not found: {repo_dir}",
+            )
         if not re.match(r'^[a-zA-Z0-9._-]+$', command_name):
-            return False, "Nome de comando invalido. Use apenas letras, numeros, ponto, _ ou -."
+            return False, SystemActions._txt(
+                "Nome de comando invalido. Use apenas letras, numeros, ponto, _ ou -.",
+                "Invalid command name. Use only letters, numbers, dot, _ or -.",
+            )
 
         current = shutil.which(command_name)
         target = f"/usr/local/bin/{command_name}"
         if current and current != target:
-            return False, f"O comando '{command_name}' ja existe em {current}."
+            return False, SystemActions._txt(
+                f"O comando '{command_name}' ja existe em {current}.",
+                f"The command '{command_name}' already exists at {current}.",
+            )
 
         launcher = (
             "#!/usr/bin/env bash\n"
@@ -1287,29 +1563,38 @@ class SystemActions:
             with open(target, 'w') as f:
                 f.write(launcher)
             os.chmod(target, 0o755)
-            return True, f"Comando '{command_name}' criado em {target}"
+            return True, SystemActions._txt(
+                f"Comando '{command_name}' criado em {target}",
+                f"Command '{command_name}' created at {target}",
+            )
         except Exception as exc:
             return False, str(exc)
 
     @staticmethod
     def create_swap(size_mb: int = 1024, swap_path: str = "/swapfile"):
         if os.name == "nt":
-            return False, "Criacao de swap nao suportada no Windows."
+            return False, SystemActions._txt("Criacao de swap nao suportada no Windows.", "Swap creation is not supported on Windows.")
         if size_mb < 256:
-            return False, "Tamanho minimo recomendado: 256 MB."
+            return False, SystemActions._txt("Tamanho minimo recomendado: 256 MB.", "Recommended minimum size: 256 MB.")
         if shutil.which("mkswap") is None or shutil.which("swapon") is None:
-            return False, "Ferramentas de swap nao encontradas (mkswap/swapon)."
+            return False, SystemActions._txt(
+                "Ferramentas de swap nao encontradas (mkswap/swapon).",
+                "Swap tools not found (mkswap/swapon).",
+            )
 
         try:
             with open("/proc/swaps", "r") as f:
                 lines = [line for line in f.read().splitlines() if line.strip()]
             if len(lines) > 1:
-                return False, "Ja existe swap ativo no sistema."
+                return False, SystemActions._txt("Ja existe swap ativo no sistema.", "There is already active swap on the system.")
         except Exception:
             pass
 
         if os.path.exists(swap_path):
-            return False, f"Arquivo de swap ja existe: {swap_path}"
+            return False, SystemActions._txt(
+                f"Arquivo de swap ja existe: {swap_path}",
+                f"Swap file already exists: {swap_path}",
+            )
 
         fallocate_ok = False
         if shutil.which("fallocate") is not None:
@@ -1330,19 +1615,19 @@ class SystemActions:
             ]
             dd_result = subprocess.run(dd_cmd, check=False)
             if dd_result.returncode != 0:
-                return False, "Falha ao criar arquivo de swap."
+                return False, SystemActions._txt("Falha ao criar arquivo de swap.", "Failed to create swap file.")
 
         chmod_result = subprocess.run(["chmod", "600", swap_path], check=False)
         if chmod_result.returncode != 0:
-            return False, "Falha ao ajustar permissoes do swapfile."
+            return False, SystemActions._txt("Falha ao ajustar permissoes do swapfile.", "Failed to adjust swapfile permissions.")
 
         mk_result = subprocess.run(["mkswap", swap_path], check=False)
         if mk_result.returncode != 0:
-            return False, "Falha ao formatar swapfile com mkswap."
+            return False, SystemActions._txt("Falha ao formatar swapfile com mkswap.", "Failed to format the swapfile with mkswap.")
 
         on_result = subprocess.run(["swapon", swap_path], check=False)
         if on_result.returncode != 0:
-            return False, "Falha ao ativar swap com swapon."
+            return False, SystemActions._txt("Falha ao ativar swap com swapon.", "Failed to enable swap with swapon.")
 
         try:
             with open("/etc/fstab", "r") as f:
@@ -1356,9 +1641,15 @@ class SystemActions:
                 with open("/etc/fstab", "a") as f:
                     f.write(f"\n{entry}\n")
             except Exception as exc:
-                return False, f"Swap criado, mas falhou ao persistir no fstab: {exc}"
+                return False, SystemActions._txt(
+                    f"Swap criado, mas falhou ao persistir no fstab: {exc}",
+                    f"Swap created, but failed to persist it in fstab: {exc}",
+                )
 
-        return True, f"Swap de {size_mb} MB criado e ativado em {swap_path}."
+        return True, SystemActions._txt(
+            f"Swap de {size_mb} MB criado e ativado em {swap_path}.",
+            f"Swap of {size_mb} MB created and enabled at {swap_path}.",
+        )
 
     @staticmethod
     def measure_server_speed(progress_callback=None):
@@ -1368,7 +1659,7 @@ class SystemActions:
 
         try:
             # Ping (TCP connect latency approximation)
-            update(5, "Medindo latencia")
+            update(5, SystemActions._txt("Medindo latencia", "Measuring latency"))
             latencies = []
             for _ in range(3):
                 start = time.perf_counter()
@@ -1378,7 +1669,7 @@ class SystemActions:
             ping_ms = round(sum(latencies) / len(latencies), 2) if latencies else 0.0
 
             # Download test
-            update(20, "Testando download")
+            update(20, SystemActions._txt("Testando download", "Testing download"))
             total_read = 0
             target_bytes = 5 * 1024 * 1024  # 5 MB for faster test
             download_urls = [
@@ -1387,7 +1678,10 @@ class SystemActions:
                 "https://raw.githubusercontent.com/github/gitignore/main/Python.gitignore",
             ]
             start = time.perf_counter()
-            last_download_error = "Falha em todas as fontes de download."
+            last_download_error = SystemActions._txt(
+                "Falha em todas as fontes de download.",
+                "All download sources failed.",
+            )
             for download_url in download_urls:
                 try:
                     total_read = 0
@@ -1398,7 +1692,13 @@ class SystemActions:
                                 continue
                             total_read += len(chunk)
                             ratio = min(1.0, total_read / target_bytes)
-                            update(20 + int(ratio * 45), f"Testando download ({download_url})")
+                            update(
+                                20 + int(ratio * 45),
+                                SystemActions._txt(
+                                    f"Testando download ({download_url})",
+                                    f"Testing download ({download_url})",
+                                ),
+                            )
                             if total_read >= target_bytes:
                                 break
                     if total_read > 0:
@@ -1407,12 +1707,15 @@ class SystemActions:
                     last_download_error = str(exc)
                     continue
             if total_read <= 0:
-                return False, f"Falha no download: {last_download_error}"
+                return False, SystemActions._txt(
+                    f"Falha no download: {last_download_error}",
+                    f"Download failed: {last_download_error}",
+                )
             download_seconds = max(time.perf_counter() - start, 0.001)
             download_mbps = round((total_read * 8) / (download_seconds * 1_000_000), 2)
 
             # Upload test
-            update(70, "Testando upload")
+            update(70, SystemActions._txt("Testando upload", "Testing upload"))
             payload = os.urandom(2 * 1024 * 1024)  # 2 MB
             upload_urls = [
                 "https://httpbin.org/post",
@@ -1420,7 +1723,10 @@ class SystemActions:
                 "https://postman-echo.com/post",
             ]
             start = time.perf_counter()
-            last_upload_error = "Falha em todas as fontes de upload."
+            last_upload_error = SystemActions._txt(
+                "Falha em todas as fontes de upload.",
+                "All upload sources failed.",
+            )
             upload_ok = False
             for upload_url in upload_urls:
                 try:
@@ -1432,10 +1738,13 @@ class SystemActions:
                     last_upload_error = str(exc)
                     continue
             if not upload_ok:
-                return False, f"Falha no upload: {last_upload_error}"
+                return False, SystemActions._txt(
+                    f"Falha no upload: {last_upload_error}",
+                    f"Upload failed: {last_upload_error}",
+                )
             upload_seconds = max(time.perf_counter() - start, 0.001)
             upload_mbps = round((len(payload) * 8) / (upload_seconds * 1_000_000), 2)
-            update(95, "Finalizando")
+            update(95, SystemActions._txt("Finalizando", "Finishing"))
 
             return True, {
                 "ping_ms": ping_ms,
@@ -1452,7 +1761,7 @@ class SystemActions:
         browser = (browser or "").strip().lower()
         manager = SystemActions._package_manager()
         if manager not in {"apt", "yum"}:
-            return False, "Gerenciador de pacotes nao suportado."
+            return False, SystemActions._txt("Gerenciador de pacotes nao suportado.", "Unsupported package manager.")
 
         try:
             if browser == "firefox":
@@ -1461,7 +1770,7 @@ class SystemActions:
                     subprocess.run(["apt-get", "install", "-y", "firefox"], check=True)
                 else:
                     subprocess.run(["yum", "-y", "install", "firefox"], check=True)
-                return True, "Firefox instalado com sucesso."
+                return True, SystemActions._txt("Firefox instalado com sucesso.", "Firefox installed successfully.")
 
             if browser == "chromium":
                 if manager == "apt":
@@ -1472,7 +1781,7 @@ class SystemActions:
                         subprocess.run(["apt-get", "install", "-y", "chromium"], check=True)
                 else:
                     subprocess.run(["yum", "-y", "install", "chromium"], check=True)
-                return True, "Chromium instalado com sucesso."
+                return True, SystemActions._txt("Chromium instalado com sucesso.", "Chromium installed successfully.")
 
             if browser == "brave":
                 if manager == "apt":
@@ -1493,10 +1802,16 @@ class SystemActions:
                     subprocess.run(["apt-get", "update", "-y"], check=True)
                     subprocess.run(["apt-get", "install", "-y", "brave-browser"], check=True)
                 else:
-                    return False, "Brave automatico suportado apenas em Debian/Ubuntu."
-                return True, "Brave instalado com sucesso."
+                    return False, SystemActions._txt(
+                        "Brave automatico suportado apenas em Debian/Ubuntu.",
+                        "Automatic Brave installation is supported only on Debian/Ubuntu.",
+                    )
+                return True, SystemActions._txt("Brave instalado com sucesso.", "Brave installed successfully.")
 
-            return False, f"Navegador desconhecido: {browser}"
+            return False, SystemActions._txt(
+                f"Navegador desconhecido: {browser}",
+                f"Unknown browser: {browser}",
+            )
         except Exception as exc:
             return False, str(exc)
 
@@ -1510,7 +1825,10 @@ class SystemActions:
         }
         desktop = candidates.get(browser)
         if not desktop:
-            return False, "Navegador invalido para definir padrao."
+            return False, SystemActions._txt(
+                "Navegador invalido para definir padrao.",
+                "Invalid browser for default selection.",
+            )
 
         # Para servidor sem sessão desktop ativa, tentamos update-alternatives.
         if shutil.which("xdg-settings"):
@@ -1521,7 +1839,10 @@ class SystemActions:
                 check=False,
             )
             if result.returncode == 0:
-                return True, f"Navegador padrao definido: {browser}"
+                return True, SystemActions._txt(
+                    f"Navegador padrao definido: {browser}",
+                    f"Default browser set: {browser}",
+                )
 
         if shutil.which("update-alternatives"):
             binary = "firefox" if browser == "firefox" else ("chromium-browser" if browser == "chromium" else "brave-browser")
@@ -1532,6 +1853,12 @@ class SystemActions:
                 check=False,
             )
             if result.returncode == 0:
-                return True, f"Navegador padrao definido: {browser}"
+                return True, SystemActions._txt(
+                    f"Navegador padrao definido: {browser}",
+                    f"Default browser set: {browser}",
+                )
 
-        return False, "Nao foi possivel definir navegador padrao automaticamente."
+        return False, SystemActions._txt(
+            "Nao foi possivel definir navegador padrao automaticamente.",
+            "Could not set the default browser automatically.",
+        )

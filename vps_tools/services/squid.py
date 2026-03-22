@@ -36,7 +36,10 @@ class SquidService(Service):
 
             config_path = self.get_config_path()
             if not config_path:
-                return "Failed to find squid configuration file path"
+                return self._txt(
+                    "Falha ao localizar o arquivo de configuracao do Squid.",
+                    "Failed to find the Squid configuration file path.",
+                )
 
             payloads_path = "/etc/rdy/payloads"
             os.makedirs("/etc/rdy", exist_ok=True)
@@ -73,7 +76,10 @@ class SquidService(Service):
                             f.write(line)
                     f.write("\nCompression yes\n")
                 if not SystemActions.restart_service_with_fallback("sshd", "ssh"):
-                    return "Falha ao reiniciar servico SSH (sshd/ssh)"
+                    return self._txt(
+                        "Falha ao reiniciar servico SSH (sshd/ssh)",
+                        "Failed to restart the SSH service (sshd/ssh)",
+                    )
 
             subprocess.run(["systemctl", "restart", service_name], check=True)
             return True

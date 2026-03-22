@@ -15,17 +15,23 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeEl
 from rich.table import Table
 from rich.text import Text
 
+from vps_tools.core.i18n import LanguageManager
+
 
 class TerminalUI:
     def __init__(self):
         self.console = Console()
         self.lang = "pt"
+        self.i18n = LanguageManager("pt")
 
     def set_language(self, lang: str):
-        self.lang = lang if lang in {"pt", "en"} else "pt"
+        self.lang = lang if self.i18n.set_language(lang) else "pt"
+        if self.lang == "pt":
+            self.i18n.set_language("pt")
+        self.i18n.set_language(self.lang)
 
     def _txt(self, pt: str, en: str) -> str:
-        return en if self.lang == "en" else pt
+        return self.i18n.t_pair(pt, en)
 
     def clear(self):
         self.console.clear()
@@ -36,10 +42,13 @@ class TerminalUI:
         header.add_row(
             Panel(
                 Text.from_markup(
-                    f"[yellow]CPU USADA: [cyan]{cpu}% [blue]| [yellow]RAM USADA: [cyan]{ram['used']}MB "
-                    f"[yellow]LIVRE: [cyan]{ram['free']}MB [blue]| [yellow]SWAP: [cyan]{swap['used']}MB\n"
-                    f"[green]##### [white]IP: [cyan]{ip} [blue]| [white]SISTEMA: [cyan]{os_info} "
-                    f"[blue]| [white]USUARIO: [cyan]{user}"
+                    f"[yellow]{self._txt('CPU USADA', 'CPU USED')}: [cyan]{cpu}% [blue]| "
+                    f"[yellow]{self._txt('RAM USADA', 'RAM USED')}: [cyan]{ram['used']}MB "
+                    f"[yellow]{self._txt('LIVRE', 'FREE')}: [cyan]{ram['free']}MB [blue]| "
+                    f"[yellow]SWAP: [cyan]{swap['used']}MB\n"
+                    f"[green]##### [white]IP: [cyan]{ip} [blue]| "
+                    f"[white]{self._txt('SISTEMA', 'SYSTEM')}: [cyan]{os_info} "
+                    f"[blue]| [white]{self._txt('USUARIO', 'USER')}: [cyan]{user}"
                 ),
                 title="[bold blue]VPS TOOLS [red]v2.0[/bold blue]",
                 border_style="blue",
@@ -176,7 +185,7 @@ class TerminalUI:
                 box=box.ROUNDED,
                 expand=True,
             )
-            table.add_column("Pick", style="cyan", width=6)
+            table.add_column(self._txt("Escolha", "Pick"), style="cyan", width=6)
             table.add_column(self._txt("Usuario", "User"), style="white")
 
             start = max(0, index - 8)

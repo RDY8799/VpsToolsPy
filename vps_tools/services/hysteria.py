@@ -77,7 +77,10 @@ masquerade:
                 f.write(config)
 
             subprocess.run(["systemctl", "restart", "hysteria-server"], check=False)
-            return f"Hysteria2 instalado na porta {port}. senha={password}"
+            return self._txt(
+                f"Hysteria2 instalado na porta {port}. senha={password}",
+                f"Hysteria2 installed on port {port}. password={password}",
+            )
         except Exception as exc:
             return str(exc)
 

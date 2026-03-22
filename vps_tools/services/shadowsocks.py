@@ -57,7 +57,10 @@ class ShadowSocksService(Service):
                 json.dump(config, f, indent=2)
 
             subprocess.run(["systemctl", "restart", service_name], check=False)
-            return f"ShadowSocks instalado na porta {port} com metodo {method}."
+            return self._txt(
+                f"ShadowSocks instalado na porta {port} com metodo {method}.",
+                f"ShadowSocks installed on port {port} with method {method}.",
+            )
         except Exception as exc:
             return str(exc)
 

@@ -25,6 +25,11 @@ class LanguageManager:
     def available_languages(self):
         return sorted(self.STRINGS.keys())
 
+    def _pairs_map(self, lang: str):
+        data = self.STRINGS.get(lang, {})
+        pairs = data.get("__pairs__", {})
+        return pairs if isinstance(pairs, dict) else {}
+
     def set_language(self, lang: str):
         if lang in self.STRINGS:
             self.current_lang = lang
@@ -39,3 +44,15 @@ class LanguageManager:
         if key in default_pt:
             return default_pt[key]
         return fallback or key
+
+    def t_pair(self, pt: str, en: str = "") -> str:
+        key = pt or en
+        if not key:
+            return ""
+        current_pairs = self._pairs_map(self.current_lang)
+        if key in current_pairs:
+            return current_pairs[key]
+        pt_pairs = self._pairs_map("pt")
+        if key in pt_pairs:
+            return pt_pairs[key] if self.current_lang != "en" or not en else en
+        return en if self.current_lang == "en" and en else pt

@@ -47,7 +47,7 @@ class XrayService(Service):
             stream = {"network": "tcp", "security": "none"}
             protocol = "trojan"
         else:
-            raise ValueError("Modo invalido. Use vless, vmess ou trojan.")
+            raise ValueError(self._txt("Modo invalido. Use vless, vmess ou trojan.", "Invalid mode. Use vless, vmess or trojan."))
 
         return {
             "log": {"loglevel": "warning"},
@@ -77,8 +77,14 @@ class XrayService(Service):
             subprocess.run(["systemctl", "restart", "xray"], check=False)
 
             if mode.lower() == "trojan":
-                return f"Xray/Trojan instalado na porta {port}. senha={secret}"
-            return f"Xray/{mode.upper()} instalado na porta {port}. id={user_id} path={path}"
+                return self._txt(
+                    f"Xray/Trojan instalado na porta {port}. senha={secret}",
+                    f"Xray/Trojan installed on port {port}. password={secret}",
+                )
+            return self._txt(
+                f"Xray/{mode.upper()} instalado na porta {port}. id={user_id} path={path}",
+                f"Xray/{mode.upper()} installed on port {port}. id={user_id} path={path}",
+            )
         except Exception as exc:
             return str(exc)
 

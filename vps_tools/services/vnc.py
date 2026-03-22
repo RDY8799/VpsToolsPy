@@ -190,8 +190,8 @@ WantedBy=multi-user.target
             subprocess.run(["systemctl", "enable", "--now", self.desktop_service_name], check=False)
             subprocess.run(["systemctl", "restart", self.desktop_service_name], check=False)
             if self._desktop_running():
-                return True, "Desktop VNC configurado e ativo."
-            return False, "Desktop VNC configurado, mas nao iniciou."
+                return True, self._txt("Desktop VNC configurado e ativo.", "VNC desktop configured and active.")
+            return False, self._txt("Desktop VNC configurado, mas nao iniciou.", "VNC desktop configured, but it did not start.")
         except Exception as exc:
             return False, str(exc)
 
@@ -211,22 +211,22 @@ WantedBy=multi-user.target
     def set_password(self, password: str):
         password = (password or "").strip()
         if not password:
-            return False, "Senha invalida."
+            return False, self._txt("Senha invalida.", "Invalid password.")
         os.makedirs("/etc/vps-tools", exist_ok=True)
         cmd = ["x11vnc", "-storepasswd", password, self.pass_file]
         result = subprocess.run(cmd, capture_output=True, text=True, check=False)
         if result.returncode != 0:
-            return False, (result.stderr or result.stdout or "Falha ao definir senha VNC.").strip()
+            return False, (result.stderr or result.stdout or self._txt("Falha ao definir senha VNC.", "Failed to set the VNC password.")).strip()
         subprocess.run(["chmod", "600", self.pass_file], check=False)
-        return True, "Senha VNC atualizada."
+        return True, self._txt("Senha VNC atualizada.", "VNC password updated.")
 
     def set_port(self, port: int):
         if not (1 <= int(port) <= 65535):
-            return False, "Porta invalida."
+            return False, self._txt("Porta invalida.", "Invalid port.")
         self._write_service(int(port))
         subprocess.run(["systemctl", "daemon-reload"], check=False)
         subprocess.run(["systemctl", "restart", self.service_name], check=False)
-        return True, f"Porta VNC alterada para {port}."
+        return True, self._txt(f"Porta VNC alterada para {port}.", f"VNC port changed to {port}.")
 
     def install(self, port: int = 5901, password: str = ""):
         try:
@@ -247,11 +247,23 @@ WantedBy=multi-user.target
             if not self.is_running():
                 ok, logs = self.read_logs(lines=60)
                 if ok:
-                    return f"VNC instalado, mas nao ficou ativo. Logs:\n{logs[-2000:]}"
-                return "VNC instalado, mas nao ficou ativo. Verifique os logs do servico."
+                    return self._txt(
+                        f"VNC instalado, mas nao ficou ativo. Logs:\n{logs[-2000:]}",
+                        f"VNC installed, but it did not remain active. Logs:\n{logs[-2000:]}",
+                    )
+                return self._txt(
+                    "VNC instalado, mas nao ficou ativo. Verifique os logs do servico.",
+                    "VNC installed, but it did not remain active. Check the service logs.",
+                )
             if not self._desktop_running():
-                return "VNC ativo, mas a sessao grafica nao iniciou. Verifique logs do vps-tools-vnc-desktop."
-            return f"VNC instalado. Porta: {port} Senha: {password}"
+                return self._txt(
+                    "VNC ativo, mas a sessao grafica nao iniciou. Verifique logs do vps-tools-vnc-desktop.",
+                    "VNC is active, but the graphical session did not start. Check the vps-tools-vnc-desktop logs.",
+                )
+            return self._txt(
+                f"VNC instalado. Porta: {port} Senha: {password}",
+                f"VNC installed. Port: {port} Password: {password}",
+            )
         except Exception as exc:
             return str(exc)
 
@@ -288,7 +300,7 @@ WantedBy=multi-user.target
         )
         if out.returncode == 0 and out.stdout.strip():
             return True, out.stdout
-        return False, "Nenhum log encontrado para VNC."
+        return False, self._txt("Nenhum log encontrado para VNC.", "No logs found for VNC.")
 
     def get_status_info(self):
         return {

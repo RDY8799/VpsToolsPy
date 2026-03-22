@@ -34,12 +34,18 @@ class DNSTTService(Service):
     def install(self, domain="", udp_port=5300, secret=""):
         try:
             if not domain:
-                return "Informe um dominio/subdominio para DNSTT (ex: dns.seudominio.com)."
+                return self._txt(
+                    "Informe um dominio/subdominio para DNSTT (ex: dns.seudominio.com).",
+                    "Provide a domain/subdomain for DNSTT (e.g. dns.example.com).",
+                )
             if not secret:
                 secret = self._random_secret()
 
             if not self._install_binary():
-                return "Falha no download do binario DNSTT. Instale manualmente e tente novamente."
+                return self._txt(
+                    "Falha no download do binario DNSTT. Instale manualmente e tente novamente.",
+                    "Failed to download the DNSTT binary. Install it manually and try again.",
+                )
 
             os.makedirs("/etc/dnstt", exist_ok=True)
             with open(self.config_path, "w") as f:
@@ -66,7 +72,10 @@ WantedBy=multi-user.target
             subprocess.run(["systemctl", "daemon-reload"], check=False)
             subprocess.run(["systemctl", "enable", "dnstt"], check=False)
             subprocess.run(["systemctl", "restart", "dnstt"], check=False)
-            return f"DNSTT configurado para {domain} (UDP {udp_port}). secret={secret}"
+            return self._txt(
+                f"DNSTT configurado para {domain} (UDP {udp_port}). secret={secret}",
+                f"DNSTT configured for {domain} (UDP {udp_port}). secret={secret}",
+            )
         except Exception as exc:
             return str(exc)
 

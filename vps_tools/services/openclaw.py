@@ -79,7 +79,7 @@ class OpenClawService(Service):
         )
         if result.returncode == 0 and self.is_installed():
             return True
-        return (result.stderr or result.stdout or "Falha ao instalar OpenClaw.").strip()
+        return (result.stderr or result.stdout or self._txt("Falha ao instalar OpenClaw.", "Failed to install OpenClaw.")).strip()
 
     def update(self):
         result = subprocess.run(
@@ -89,8 +89,8 @@ class OpenClawService(Service):
             check=False,
         )
         if result.returncode == 0:
-            return True, (result.stdout.strip() or "OpenClaw atualizado.")
-        return False, (result.stderr.strip() or result.stdout.strip() or "Falha ao atualizar OpenClaw.")
+            return True, (result.stdout.strip() or self._txt("OpenClaw atualizado.", "OpenClaw updated."))
+        return False, (result.stderr.strip() or result.stdout.strip() or self._txt("Falha ao atualizar OpenClaw.", "Failed to update OpenClaw."))
 
     def uninstall(self):
         # Tentativas suportadas por diferentes builds/scripts
@@ -129,7 +129,7 @@ class OpenClawService(Service):
 
     def get_version(self) -> str:
         if not shutil.which("openclaw"):
-            return "not installed"
+            return self._txt("nao instalado", "not installed")
         try:
             result = subprocess.run(
                 ["openclaw", "--version"],
@@ -138,10 +138,10 @@ class OpenClawService(Service):
                 check=False,
             )
         except FileNotFoundError:
-            return "not installed"
+            return self._txt("nao instalado", "not installed")
         if result.returncode == 0:
-            return (result.stdout or result.stderr).strip() or "unknown"
-        return "unknown"
+            return (result.stdout or result.stderr).strip() or self._txt("desconhecido", "unknown")
+        return self._txt("desconhecido", "unknown")
 
     def get_status_info(self):
         units = self._existing_units()
@@ -162,4 +162,4 @@ class OpenClawService(Service):
             )
             if out.returncode == 0 and out.stdout.strip():
                 return True, out.stdout
-        return False, "Nenhum log encontrado para OpenClaw."
+        return False, self._txt("Nenhum log encontrado para OpenClaw.", "No logs found for OpenClaw.")

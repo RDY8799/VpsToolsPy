@@ -49,6 +49,7 @@ Suite de gerenciamento de VPS em Python para automacao de servicos, usuarios e f
   - HTTPS com Certbot
 - Internacionalizacao:
   - strings externas em `vps_tools/i18n/strings.json`
+  - menu de idioma detecta automaticamente os codigos presentes no arquivo
   - suporte atual a PT/EN com base pronta para adicionar muitas linguas
 
 ## Requisitos
@@ -152,6 +153,27 @@ O submenu concentra os fluxos de deploy e dados:
 - HTTPS com Certbot
 
 Esse menu abre com um painel limpo de status dos componentes principais, mostrando apenas se cada item esta ativo ou inativo.
+
+## Adicionar novo idioma
+
+1. Abra `vps_tools/i18n/strings.json`
+2. Crie um novo bloco com o codigo do idioma, por exemplo `es`, `fr` ou `de`
+3. Preencha as chaves normais e tambem `__pairs__`
+4. Salve o arquivo
+5. Abra o menu de idioma no app e selecione o novo codigo
+
+Exemplo minimo:
+
+```json
+{
+  "es": {
+    "__pairs__": {
+      "MENU PRINCIPAL": "MENU PRINCIPAL",
+      "BANCO DE DADOS / BACKEND": "BASE DE DATOS / BACKEND"
+    }
+  }
+}
+```
 
 ## Comando global (`menu`)
 

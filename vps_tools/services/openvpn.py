@@ -231,7 +231,7 @@ verb 3
         try:
             protocol = protocol.lower().strip()
             if protocol not in {"udp", "tcp"}:
-                return "Protocolo invalido. Use udp ou tcp."
+                return self._txt("Protocolo invalido. Use udp ou tcp.", "Invalid protocol. Use udp or tcp.")
 
             self._install_packages()
             self._build_pki(client_name=client_name)
@@ -250,7 +250,10 @@ verb 3
 
             if not self.restart():
                 self.start()
-            return f"OpenVPN instalado. Cliente gerado em: {client_path}"
+            return self._txt(
+                f"OpenVPN instalado. Cliente gerado em: {client_path}",
+                f"OpenVPN installed. Client generated at: {client_path}",
+            )
         except Exception as exc:
             return str(exc)
 
@@ -267,7 +270,7 @@ verb 3
         try:
             username = username.strip()
             if not username:
-                return "Nome de usuario invalido."
+                return self._txt("Nome de usuario invalido.", "Invalid username.")
             env = os.environ.copy()
             env["EASYRSA_BATCH"] = "1"
             subprocess.run(
@@ -286,7 +289,10 @@ verb 3
                 protocol=proto,
                 use_domain=use_domain,
             )
-            return f"Cliente criado com sucesso: {profile}"
+            return self._txt(
+                f"Cliente criado com sucesso: {profile}",
+                f"Client created successfully: {profile}",
+            )
         except Exception as exc:
             return str(exc)
 
@@ -294,7 +300,7 @@ verb 3
         try:
             username = username.strip()
             if not username:
-                return "Nome de usuario invalido."
+                return self._txt("Nome de usuario invalido.", "Invalid username.")
             env = os.environ.copy()
             env["EASYRSA_BATCH"] = "1"
             subprocess.run(

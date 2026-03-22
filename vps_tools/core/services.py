@@ -1,10 +1,19 @@
 import subprocess
 
+from vps_tools.core.i18n import LanguageManager
+
 
 class Service:
     def __init__(self, name: str, system_service_name: str):
         self.name = name
         self.system_service_name = system_service_name
+        self.i18n = LanguageManager("pt")
+
+    def set_language(self, lang: str):
+        self.i18n.set_language(lang)
+
+    def _txt(self, pt: str, en: str) -> str:
+        return self.i18n.t_pair(pt, en)
 
     def is_installed(self) -> bool:
         # Generic installation check using dpkg or yum
@@ -51,10 +60,10 @@ class Service:
         return self._service_action('restart')
 
     def uninstall(self) -> bool:
-        raise NotImplementedError("Uninstall must be implemented by subclasses")
+        raise NotImplementedError(self._txt("Uninstall deve ser implementado pelas subclasses", "Uninstall must be implemented by subclasses"))
 
     def install(self) -> bool:
-        raise NotImplementedError("Install must be implemented by subclasses")
+        raise NotImplementedError(self._txt("Install deve ser implementado pelas subclasses", "Install must be implemented by subclasses"))
 
     def get_ports(self) -> list:
         # Should be implemented by subclasses to parse config and find ports

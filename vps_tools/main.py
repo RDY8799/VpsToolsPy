@@ -39,6 +39,7 @@ class VPSToolsApp:
         self.power_tools = PowerTools()
         self.lang = LanguageManager("pt")
         self.ui.set_language(self.lang.current_lang)
+        self.sys_actions.set_language(self.lang.current_lang)
         self.user_manager = UserManager()
         self.repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.services = {
@@ -57,6 +58,9 @@ class VPSToolsApp:
             "VNC": VNCService(),
             "DOMAIN_AUDIT": DomainAuditService(),
         }
+        for service in self.services.values():
+            if hasattr(service, "set_language"):
+                service.set_language(self.lang.current_lang)
 
     @staticmethod
     def _normalize_option(value: str) -> str:
@@ -70,7 +74,7 @@ class VPSToolsApp:
         return value.lower()
 
     def _txt(self, pt: str, en: str) -> str:
-        return en if self.lang.current_lang == "en" else pt
+        return self.lang.t_pair(pt, en)
 
     def _confirm_default_yes(self, action: str) -> bool:
         action_lc = (action or "").strip().lower()
@@ -912,15 +916,13 @@ class VPSToolsApp:
             if option == "1":
                 if not self._confirm("criacao de usuario"):
                     continue
-                username = self.ui.prompt("Nome do novo usuario: " if self.lang.current_lang == "pt" else "New username: ")
-                password = self.ui.prompt("Senha para o usuario: " if self.lang.current_lang == "pt" else "Password for user: ")
-                days = self.ui.prompt("Dias para expirar: " if self.lang.current_lang == "pt" else "Days to expire: ")
-                limit = self.ui.prompt("Limite de conexoes: " if self.lang.current_lang == "pt" else "Connection limit: ")
+                username = self.ui.prompt(self._txt("Nome do novo usuario: ", "New username: "))
+                password = self.ui.prompt(self._txt("Senha para o usuario: ", "Password for user: "))
+                days = self.ui.prompt(self._txt("Dias para expirar: ", "Days to expire: "))
+                limit = self.ui.prompt(self._txt("Limite de conexoes: ", "Connection limit: "))
                 result = self.user_manager.create_user(username, password, days, limit)
                 if result is True:
-                    self.ui.print_success(
-                        f"Usuario {username} criado!" if self.lang.current_lang == "pt" else f"User {username} created!"
-                    )
+                    self.ui.print_success(self._txt(f"Usuario {username} criado!", f"User {username} created!"))
                 else:
                     self.ui.print_error(f"{self.lang.t('common.error_prefix', 'Erro:')} {result}")
                 time.sleep(2)
@@ -933,9 +935,7 @@ class VPSToolsApp:
                     continue
                 result = self.user_manager.delete_user(username)
                 if result is True:
-                    self.ui.print_success(
-                        f"Usuario {username} deletado!" if self.lang.current_lang == "pt" else f"User {username} deleted!"
-                    )
+                    self.ui.print_success(self._txt(f"Usuario {username} deletado!", f"User {username} deleted!"))
                 else:
                     self.ui.print_error(f"{self.lang.t('common.error_prefix', 'Erro:')} {result}")
                 time.sleep(2)
@@ -946,12 +946,10 @@ class VPSToolsApp:
                 username = self._pick_user_for_action("alterar limite")
                 if not username:
                     continue
-                new_limit = self.ui.prompt("Novo limite de logins: " if self.lang.current_lang == "pt" else "New login limit: ")
+                new_limit = self.ui.prompt(self._txt("Novo limite de logins: ", "New login limit: "))
                 result = self.user_manager.change_limit(username, new_limit)
                 if result is True:
-                    self.ui.print_success(
-                        f"Limite de {username} atualizado!" if self.lang.current_lang == "pt" else f"{username} limit updated!"
-                    )
+                    self.ui.print_success(self._txt(f"Limite de {username} atualizado!", f"{username} limit updated!"))
                 else:
                     self.ui.print_error(f"{self.lang.t('common.error_prefix', 'Erro:')} {result}")
                 time.sleep(2)
@@ -962,14 +960,12 @@ class VPSToolsApp:
                 username = self._pick_user_for_action("alterar expiracao")
                 if not username:
                     continue
-                year = self.ui.prompt("Ano (YYYY): " if self.lang.current_lang == "pt" else "Year (YYYY): ")
-                month = self.ui.prompt("Mes (MM): " if self.lang.current_lang == "pt" else "Month (MM): ")
-                day = self.ui.prompt("Dia (DD): " if self.lang.current_lang == "pt" else "Day (DD): ")
+                year = self.ui.prompt(self._txt("Ano (YYYY): ", "Year (YYYY): "))
+                month = self.ui.prompt(self._txt("Mes (MM): ", "Month (MM): "))
+                day = self.ui.prompt(self._txt("Dia (DD): ", "Day (DD): "))
                 result = self.user_manager.change_expiry(username, year, month, day)
                 if result is True:
-                    self.ui.print_success(
-                        f"Expiracao de {username} atualizada!" if self.lang.current_lang == "pt" else f"{username} expiry updated!"
-                    )
+                    self.ui.print_success(self._txt(f"Expiracao de {username} atualizada!", f"{username} expiry updated!"))
                 else:
                     self.ui.print_error(f"{self.lang.t('common.error_prefix', 'Erro:')} {result}")
                 time.sleep(2)
@@ -980,12 +976,10 @@ class VPSToolsApp:
                 username = self._pick_user_for_action("alterar senha")
                 if not username:
                     continue
-                new_password = self.ui.prompt("Nova senha: " if self.lang.current_lang == "pt" else "New password: ")
+                new_password = self.ui.prompt(self._txt("Nova senha: ", "New password: "))
                 result = self.user_manager.change_password(username, new_password)
                 if result is True:
-                    self.ui.print_success(
-                        f"Senha de {username} alterada!" if self.lang.current_lang == "pt" else f"{username} password changed!"
-                    )
+                    self.ui.print_success(self._txt(f"Senha de {username} alterada!", f"{username} password changed!"))
                 else:
                     self.ui.print_error(f"{self.lang.t('common.error_prefix', 'Erro:')} {result}")
                 time.sleep(2)
@@ -997,40 +991,30 @@ class VPSToolsApp:
                 if not username:
                     continue
                 if self.user_manager.disconnect_user(username):
-                    self.ui.print_success(
-                        f"Usuario {username} desconectado!" if self.lang.current_lang == "pt" else f"User {username} disconnected!"
-                    )
+                    self.ui.print_success(self._txt(f"Usuario {username} desconectado!", f"User {username} disconnected!"))
                 else:
-                    self.ui.print_error(
-                        f"Nao foi possivel desconectar {username}." if self.lang.current_lang == "pt" else f"Could not disconnect {username}."
-                    )
+                    self.ui.print_error(self._txt(f"Nao foi possivel desconectar {username}.", f"Could not disconnect {username}."))
                 time.sleep(2)
 
             elif option == "7":
                 if not self._confirm("backup de usuarios"):
                     continue
-                name = self.ui.prompt("Nome para o arquivo de backup: " if self.lang.current_lang == "pt" else "Backup filename: ")
+                name = self.ui.prompt(self._txt("Nome para o arquivo de backup: ", "Backup filename: "))
                 path = self.user_manager.backup_users(name)
                 if isinstance(path, str) and path.startswith("Erro"):
                     self.ui.print_error(path)
                 else:
-                    self.ui.print_success(
-                        f"Backup criado em: {path}" if self.lang.current_lang == "pt" else f"Backup created at: {path}"
-                    )
+                    self.ui.print_success(self._txt(f"Backup criado em: {path}", f"Backup created at: {path}"))
                 time.sleep(2)
 
             elif option == "8":
                 if not self._confirm("restauracao de backup"):
                     continue
-                file_path = self.ui.prompt("Caminho completo do backup: " if self.lang.current_lang == "pt" else "Full backup path: ")
+                file_path = self.ui.prompt(self._txt("Caminho completo do backup: ", "Full backup path: "))
                 if self.user_manager.restore_backup(file_path):
-                    self.ui.print_success(
-                        "Backup restaurado com sucesso!" if self.lang.current_lang == "pt" else "Backup restored successfully!"
-                    )
+                    self.ui.print_success(self._txt("Backup restaurado com sucesso!", "Backup restored successfully!"))
                 else:
-                    self.ui.print_error(
-                        "Falha ao restaurar backup." if self.lang.current_lang == "pt" else "Failed to restore backup."
-                    )
+                    self.ui.print_error(self._txt("Falha ao restaurar backup.", "Failed to restore backup."))
                 time.sleep(2)
 
             elif option == "00":
@@ -1424,7 +1408,7 @@ class VPSToolsApp:
             elif option == "3":
                 if not self._confirm("limpeza de cache e inodes"):
                     continue
-                self.ui.show_spinner("Limpando cache")
+                self.ui.show_spinner(self._txt("Limpando cache", "Clearing cache"))
                 result = self.sys_actions.clear_cache()
                 if result is True:
                     self.ui.print_success(self.lang.t("tools.cache_cleaned", "Cache limpo!"))
@@ -1597,7 +1581,7 @@ class VPSToolsApp:
                 f"{self._txt('Instalacao', 'Installation')}: {installed_text}\n"
                 f"{self._txt('Execucao', 'Runtime')}: {status_text}\n"
                 f"{self._txt('Desktop', 'Desktop')}: "
-                f"{('[bold green]ATIVO[/]' if desktop_running else ('[bold red]NAO CONFIGURADO[/]' if not desktop_configured else '[bold red]INATIVO[/]')) if self.lang.current_lang == 'pt' else ('[bold green]ACTIVE[/]' if desktop_running else ('[bold red]NOT CONFIGURED[/]' if not desktop_configured else '[bold red]INACTIVE[/]'))}\n"
+                f"{'[bold green]' + self._txt('ATIVO', 'ACTIVE') + '[/]' if desktop_running else ('[bold red]' + self._txt('NAO CONFIGURADO', 'NOT CONFIGURED') + '[/]' if not desktop_configured else '[bold red]' + self._txt('INATIVO', 'INACTIVE') + '[/]')}\n"
                 f"{self._txt('Porta', 'Port')}: [cyan]{info.get('port', 5901)}[/]",
                 title=self._txt("VNC MANAGER", "VNC MANAGER"),
                 border_style="cyan",
@@ -2009,8 +1993,8 @@ class VPSToolsApp:
         )
         table.add_column("PROTO", style="cyan", justify="center", width=8)
         table.add_column("HOST", style="white", overflow="fold")
-        table.add_column("PORTA" if self.lang.current_lang == "pt" else "PORT", style="yellow", justify="right", width=8)
-        table.add_column("PROCESSO" if self.lang.current_lang == "pt" else "PROCESS", style="green", overflow="fold")
+        table.add_column(self._txt("PORTA", "PORT"), style="yellow", justify="right", width=8)
+        table.add_column(self._txt("PROCESSO", "PROCESS"), style="green", overflow="fold")
         table.add_column("PID", style="magenta", justify="right", width=8)
 
         if rows:
@@ -2148,7 +2132,7 @@ class VPSToolsApp:
     def firewall_menu(self):
         if not self._confirm("aplicacao de perfil de firewall"):
             return
-        profile = self.ui.prompt("Perfil (basic/open): ").strip().lower()
+        profile = self.ui.prompt(self._txt("Perfil (basic/open): ", "Profile (basic/open): ")).strip().lower()
         ok, msg = self.power_tools.firewall_apply(profile)
         if ok:
             self.ui.print_success(msg)
@@ -2221,9 +2205,14 @@ class VPSToolsApp:
         self.ui.prompt(self.lang.t("wizard.done", "Setup finalizado. Enter para voltar..."))
 
     def language_menu(self):
-        option = self.ui.prompt(self.lang.t("language.prompt", "Idioma (pt/en): ")).strip().lower()
+        langs = "/".join(self.lang.available_languages())
+        option = self.ui.prompt(self._txt(f"Idioma ({langs}): ", f"Language ({langs}): ")).strip().lower()
         if self.lang.set_language(option):
             self.ui.set_language(option)
+            self.sys_actions.set_language(option)
+            for service in self.services.values():
+                if hasattr(service, "set_language"):
+                    service.set_language(option)
             self.ui.print_success(self.lang.t("lang.changed", "Idioma alterado com sucesso."))
         else:
             self.ui.print_error(self.lang.t("lang.invalid", "Idioma invalido."))

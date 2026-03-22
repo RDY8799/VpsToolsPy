@@ -46,7 +46,7 @@ class DomainAuditService(Service):
         return True
 
     def uninstall(self):
-        return "Domain Audit e um modulo interno de execucao."
+        return self._txt("Domain Audit e um modulo interno de execucao.", "Domain Audit is an internal execution module.")
 
     def install(self):
         return True
@@ -67,7 +67,7 @@ class DomainAuditService(Service):
                 continue
             port = int(p)
             if not (1 <= port <= 65535):
-                raise ValueError(f"Porta invalida: {p}")
+                raise ValueError(self._txt(f"Porta invalida: {p}", f"Invalid port: {p}"))
             ports.append(port)
         return sorted(set(ports))
 
@@ -245,6 +245,9 @@ class DomainAuditService(Service):
                 if not out.suffix:
                     out = Path(f"{output}.csv")
                 self._save_csv(results, out)
-            return True, f"Domain audit concluido. Saida: {out}"
+            return True, self._txt(
+                f"Domain audit concluido. Saida: {out}",
+                f"Domain audit completed. Output: {out}",
+            )
         except Exception as exc:
             return False, str(exc)
