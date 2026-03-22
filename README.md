@@ -42,7 +42,7 @@ Suite de gerenciamento de VPS em Python para automacao de servicos, usuarios e f
   - MySQL com criacao de banco/usuario
   - MariaDB com criacao de banco/usuario
   - MongoDB com repositório oficial, usuario da aplicacao e auth opcional
-  - Redis com repositório oficial, bind/porta/senha configuraveis
+  - Redis para cache, sessoes, filas leves e dados temporarios, com bind/porta/senha configuraveis
   - preparo de backend Spring Boot na EC2
   - criacao e gerenciamento de servico `systemd`
   - Nginx reverse proxy configuravel
@@ -275,6 +275,15 @@ O submenu concentra os fluxos de deploy e dados:
 - HTTPS com Certbot
 
 Esse menu abre com um painel limpo de status dos componentes principais, mostrando apenas se cada item esta ativo ou inativo.
+
+No caso do Redis, o foco e complementar o backend com:
+
+- cache
+- sessoes
+- filas leves
+- dados temporarios
+
+Ele nao substitui o banco principal da aplicacao, como PostgreSQL ou MySQL.
 
 ## Adicionar novo idioma
 

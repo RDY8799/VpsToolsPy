@@ -186,7 +186,7 @@ class VPSToolsApp:
                 "instalacao do banco mysql": "MySQL database setup",
                 "instalacao do banco mariadb": "MariaDB database setup",
                 "instalacao do banco mongodb": "MongoDB database setup",
-                "instalacao do banco redis": "Redis setup",
+                "instalacao do banco redis": "Redis cache/session/queue setup",
                 "configuracao de reverse proxy nginx": "Nginx reverse proxy setup",
                 "configuracao de https com certbot": "HTTPS with Certbot setup",
                 "criacao de servico systemd generico": "generic systemd service creation",
@@ -655,6 +655,20 @@ class VPSToolsApp:
     def _redis_setup_flow(self):
         if not self._confirm("instalacao do banco redis"):
             return
+        self.ui.console.print(
+            Panel(
+                self._txt(
+                    "Redis e um banco em memoria usado principalmente para cache, sessao, filas leves e dados temporarios.\n"
+                    "Nao substitui o banco principal da aplicacao.\n"
+                    "Para maior seguranca, o ideal e manter bind local e usar senha.",
+                    "Redis is an in-memory database mainly used for cache, session storage, light queues, and temporary data.\n"
+                    "It does not replace the application's main database.\n"
+                    "For better security, keep it bound locally and use a password.",
+                ),
+                title=self._txt("SOBRE O REDIS", "ABOUT REDIS"),
+                border_style="yellow",
+            )
+        )
         bind_address = self._prompt_default("Bind address do Redis", "Redis bind address", "127.0.0.1")
         port = self._prompt_int_default("Porta do Redis", "Redis port", 6379)
         password = self._prompt_default("Senha do Redis (vazio = sem senha)", "Redis password (empty = no password)", "")
@@ -816,7 +830,7 @@ class VPSToolsApp:
                 "02": self._txt("CRIAR BANCO MYSQL", "CREATE MYSQL DATABASE"),
                 "03": self._txt("CRIAR BANCO MARIADB", "CREATE MARIADB DATABASE"),
                 "04": self._txt("CRIAR BANCO MONGODB", "CREATE MONGODB DATABASE"),
-                "05": self._txt("CONFIGURAR REDIS", "CONFIGURE REDIS"),
+                "05": self._txt("REDIS (CACHE / SESSAO / FILAS)", "REDIS (CACHE / SESSIONS / QUEUES)"),
                 "06": self._txt("PREPARAR BACKEND SPRING BOOT", "PREPARE SPRING BOOT BACKEND"),
                 "07": self._txt("CRIAR SERVICO SYSTEMD GENERICO", "CREATE GENERIC SYSTEMD SERVICE"),
                 "08": self._txt("GERENCIAR SERVICO SYSTEMD", "MANAGE SYSTEMD SERVICE"),
