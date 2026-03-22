@@ -309,6 +309,58 @@ class SystemActions:
         }
 
     @staticmethod
+    def _detect_docker_host_gateway_ip():
+        daemon_json_path = "/etc/docker/daemon.json"
+        if os.path.exists(daemon_json_path):
+            try:
+                with open(daemon_json_path, "r", encoding="utf-8") as f:
+                    daemon_config = json.load(f)
+                if isinstance(daemon_config, dict):
+                    single_ip = (daemon_config.get("host-gateway-ip") or "").strip()
+                    if single_ip:
+                        return True, single_ip
+                    ip_list = daemon_config.get("host-gateway-ips")
+                    if isinstance(ip_list, list):
+                        for item in ip_list:
+                            ip_value = str(item or "").strip()
+                            if ip_value and ":" not in ip_value:
+                                return True, ip_value
+            except Exception:
+                pass
+
+        result = subprocess.run(
+            ["docker", "network", "inspect", "bridge"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return False, (result.stderr or result.stdout or "").strip() or SystemActions._txt(
+                "Falha ao detectar a bridge padrao do Docker.",
+                "Failed to detect the default Docker bridge.",
+            )
+        try:
+            payload = json.loads(result.stdout or "[]")
+        except json.JSONDecodeError as exc:
+            return False, str(exc)
+        if not payload:
+            return False, SystemActions._txt(
+                "A inspecao da bridge padrao do Docker nao retornou dados.",
+                "Inspection of the default Docker bridge returned no data.",
+            )
+        network = payload[0] if isinstance(payload[0], dict) else {}
+        ipam = network.get("IPAM") if isinstance(network, dict) else {}
+        configs = ipam.get("Config") if isinstance(ipam, dict) else []
+        config0 = configs[0] if configs and isinstance(configs[0], dict) else {}
+        gateway = (config0.get("Gateway") or "").strip()
+        if not gateway:
+            return False, SystemActions._txt(
+                "Nao foi possivel detectar o host-gateway padrao do Docker.",
+                "Could not detect the default Docker host gateway.",
+            )
+        return True, gateway
+
+    @staticmethod
     def _upsert_pg_hba_rule(conf_path: str, database: str, db_user: str, cidr: str, auth_method: str):
         if not os.path.exists(conf_path):
             return False, SystemActions._txt(
@@ -1254,7 +1306,10 @@ class SystemActions:
             network_data = network_result[1]
             docker_network = network_data["network_name"]
             docker_cidr = (docker_cidr_override or "").strip() or (network_data.get("subnet") or "").strip()
-            listen_host = (listen_host_override or "").strip() or (network_data.get("gateway") or "").strip()
+            host_gateway_result = SystemActions._detect_docker_host_gateway_ip()
+            if not host_gateway_result[0] and not (listen_host_override or "").strip():
+                return False, host_gateway_result[1]
+            listen_host = (listen_host_override or "").strip() or host_gateway_result[1]
             if not docker_cidr:
                 return False, SystemActions._txt(
                     "Nao foi possivel detectar a sub-rede Docker. Informe o CIDR manualmente.",
