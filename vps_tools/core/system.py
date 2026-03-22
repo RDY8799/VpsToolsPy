@@ -2024,16 +2024,38 @@ class SystemActions:
                     "Falha ao atualizar o repositorio do Docker.",
                     "Failed to refresh the Docker repository.",
                 )
-            result = subprocess.run(
-                [
-                    "apt-get", "install", "-y",
-                    "docker-ce", "docker-ce-cli", "containerd.io",
-                    "docker-buildx-plugin", "docker-compose-plugin",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+            policy_rc_path = "/usr/sbin/policy-rc.d"
+            policy_rc_backup_path = f"{policy_rc_path}.vps-tools-panel.bak"
+            policy_rc_had_original = os.path.exists(policy_rc_path)
+            if policy_rc_had_original:
+                try:
+                    if os.path.exists(policy_rc_backup_path):
+                        os.remove(policy_rc_backup_path)
+                    shutil.copy2(policy_rc_path, policy_rc_backup_path)
+                except Exception as exc:
+                    return False, str(exc)
+            ok, msg = SystemActions._write_text_file(policy_rc_path, "#!/bin/sh\nexit 101\n", mode=0o755)
+            if not ok:
+                return False, msg
+            try:
+                result = subprocess.run(
+                    [
+                        "apt-get", "install", "-y",
+                        "docker-ce", "docker-ce-cli", "containerd.io",
+                        "docker-buildx-plugin", "docker-compose-plugin",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            finally:
+                try:
+                    if policy_rc_had_original and os.path.exists(policy_rc_backup_path):
+                        os.replace(policy_rc_backup_path, policy_rc_path)
+                    elif os.path.exists(policy_rc_path):
+                        os.remove(policy_rc_path)
+                except Exception:
+                    pass
             if result.returncode != 0:
                 return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
                     "Falha na instalacao do Docker Engine.",
@@ -2042,26 +2064,16 @@ class SystemActions:
 
             subprocess.run(["iptables", "-P", "FORWARD", "ACCEPT"], capture_output=True, text=True, check=False)
 
-            update(55, SystemActions._txt("Habilitando e iniciando o Docker", "Enabling and starting Docker"))
+            update(55, SystemActions._txt("Mantendo o Docker parado ate a ativacao manual", "Keeping Docker stopped until manual activation"))
             for cmd in (
-                ["systemctl", "enable", "docker"],
-                ["systemctl", "enable", "docker.socket"],
-                ["systemctl", "restart", "docker"],
+                ["systemctl", "disable", "docker"],
+                ["systemctl", "disable", "docker.socket"],
+                ["systemctl", "stop", "docker"],
+                ["systemctl", "stop", "docker.socket"],
             ):
-                result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-                if result.returncode != 0:
-                    return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
-                        f"Falha ao executar: {' '.join(cmd)}",
-                        f"Failed to execute: {' '.join(cmd)}",
-                    )
+                subprocess.run(cmd, capture_output=True, text=True, check=False)
 
             subprocess.run(["iptables", "-P", "FORWARD", "ACCEPT"], capture_output=True, text=True, check=False)
-            docker_active = subprocess.run(["systemctl", "is-active", "docker"], capture_output=True, text=True, check=False)
-            if docker_active.returncode != 0 or docker_active.stdout.strip() != "active":
-                return False, (docker_active.stderr or docker_active.stdout or "").strip() or SystemActions._txt(
-                    "Docker nao ficou ativo apos o restart.",
-                    "Docker did not remain active after restart.",
-                )
             iptables_result = subprocess.run(["iptables", "-S"], capture_output=True, text=True, check=False)
 
             compose_file = os.path.join(app_dir, "compose.yml")
@@ -2112,22 +2124,9 @@ class SystemActions:
             if not ok:
                 return False, msg
 
-            update(85, SystemActions._txt("Subindo containers do painel", "Starting panel containers"))
-            compose_result = SystemActions._docker_compose_run(compose_file, ["up", "-d"], capture_output=True, text=True)
-            if compose_result is None:
-                return False, SystemActions._txt(
-                    "Docker Compose nao encontrado apos a instalacao.",
-                    "Docker Compose was not found after installation.",
-                )
-            if compose_result.returncode != 0:
-                return False, (compose_result.stderr or compose_result.stdout or "").strip() or SystemActions._txt(
-                    "Falha ao subir os containers do painel.",
-                    "Failed to start the panel containers.",
-                )
-
-            ps_result = SystemActions._docker_compose_run(compose_file, ["ps"], capture_output=True, text=True)
+            update(85, SystemActions._txt("Deixando o painel pronto para ativacao segura", "Leaving the panel ready for safe activation"))
             docker_status = subprocess.run(["systemctl", "status", "docker", "--no-pager"], capture_output=True, text=True, check=False)
-            update(100, SystemActions._txt("Painel web de bancos instalado", "Web database panel installed"))
+            update(100, SystemActions._txt("Painel web de bancos preparado", "Web database panel prepared"))
             return True, {
                 "app_dir": app_dir,
                 "compose_file": compose_file,
@@ -2145,7 +2144,10 @@ class SystemActions:
                     )
                     if enabled
                 ],
-                "compose_status": (ps_result.stdout or ps_result.stderr or "").strip() if ps_result else "",
+                "compose_status": SystemActions._txt(
+                    "Painel preparado. Use GERENCIAR PAINEL WEB DE BANCOS -> Iniciar/atualizar painel quando quiser ativar o Docker.",
+                    "Panel prepared. Use MANAGE WEB DATABASE PANEL -> Start/update panel when you want to activate Docker.",
+                ),
                 "docker_status": (docker_status.stdout or docker_status.stderr or "").strip(),
                 "iptables_status": (iptables_result.stdout or iptables_result.stderr or "").strip(),
                 "notes": [
@@ -2153,6 +2155,7 @@ class SystemActions:
                     SystemActions._txt("use host.docker.internal dentro dos paineis para acessar bancos da maquina", "use host.docker.internal inside the tools to access databases on the host machine"),
                     SystemActions._txt("nao abra a porta do painel para toda a internet", "do not expose the panel port to the entire internet"),
                     SystemActions._txt("foi aplicado ip-forward-no-drop=true no Docker para evitar FORWARD DROP automatico", "ip-forward-no-drop=true was applied in Docker to avoid automatic FORWARD DROP"),
+                    SystemActions._txt("o Docker foi mantido parado ao final da instalacao para reduzir risco de queda na VPS", "Docker was kept stopped at the end of the installation to reduce VPS outage risk"),
                 ],
             }
         except Exception as exc:
@@ -2173,6 +2176,27 @@ class SystemActions:
                     f"Acao invalida para o painel web: {action}",
                     f"Invalid action for the web panel: {action}",
                 )
+
+            if action in {"start", "restart"}:
+                ok, msg = SystemActions._merge_json_file(
+                    "/etc/docker/daemon.json",
+                    {"ip-forward-no-drop": True},
+                )
+                if not ok:
+                    return False, msg
+                subprocess.run(["iptables", "-P", "FORWARD", "ACCEPT"], capture_output=True, text=True, check=False)
+                for cmd in (
+                    ["systemctl", "enable", "docker"],
+                    ["systemctl", "enable", "docker.socket"],
+                    ["systemctl", "start", "docker"],
+                ):
+                    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                    if result.returncode != 0:
+                        return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                            f"Falha ao executar: {' '.join(cmd)}",
+                            f"Failed to execute: {' '.join(cmd)}",
+                        )
+                subprocess.run(["iptables", "-P", "FORWARD", "ACCEPT"], capture_output=True, text=True, check=False)
 
             if action == "status":
                 result = SystemActions._docker_compose_run(compose_file, ["ps"], capture_output=True, text=True)

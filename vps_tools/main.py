@@ -799,12 +799,12 @@ class VPSToolsApp:
                 )
             summary += (
                 f"\n[white]{self._txt('Observacoes', 'Notes')}:[/white]\n{notes}\n\n"
-                f"[white]docker compose ps[/white]\n{data['compose_status'][-2500:]}"
+                f"[white]{self._txt('Ativacao', 'Activation')}:[/white]\n{data['compose_status'][-2500:]}"
             )
             self.ui.console.print(
                 Panel(
                     summary,
-                    title=self._txt("PAINEL WEB INSTALADO", "WEB PANEL INSTALLED"),
+                    title=self._txt("PAINEL WEB PREPARADO", "WEB PANEL PREPARED"),
                     border_style="green",
                 )
             )
