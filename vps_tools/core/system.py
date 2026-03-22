@@ -244,6 +244,109 @@ class SystemActions:
             return False, str(exc)
 
     @staticmethod
+    def _postgresql_runtime_setting(setting_name: str):
+        result = SystemActions._run_as_postgres(
+            ["psql", "-At", "-d", "postgres", "-c", f"SHOW {setting_name};"]
+        )
+        if result.returncode != 0:
+            return False, (result.stderr or result.stdout or "").strip() or SystemActions._txt(
+                f"Falha ao consultar SHOW {setting_name}.",
+                f"Failed to query SHOW {setting_name}.",
+            )
+        return True, (result.stdout or "").strip()
+
+    @staticmethod
+    def _detect_web_db_panel_network(app_dir: str = "/opt/vps-tools-db-panel", docker_network_name: str = ""):
+        network_name = (docker_network_name or "").strip()
+        if not network_name:
+            compose_file = os.path.join(app_dir, "compose.yml")
+            if os.path.exists(compose_file):
+                try:
+                    with open(compose_file, "r", encoding="utf-8") as f:
+                        content = f.read()
+                    match = re.search(r'(?m)^name:\s*"?([^"\n]+)"?\s*$', content)
+                    if match:
+                        network_name = f"{match.group(1).strip()}_default"
+                except Exception as exc:
+                    return False, str(exc)
+        if not network_name:
+            return False, SystemActions._txt(
+                "Nao foi possivel detectar o nome da rede Docker do painel.",
+                "Could not detect the panel Docker network name.",
+            )
+
+        result = subprocess.run(
+            ["docker", "network", "inspect", network_name],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return False, (result.stderr or result.stdout or "").strip() or SystemActions._txt(
+                f"Falha ao inspecionar a rede Docker {network_name}.",
+                f"Failed to inspect Docker network {network_name}.",
+            )
+        try:
+            payload = json.loads(result.stdout or "[]")
+        except json.JSONDecodeError as exc:
+            return False, str(exc)
+        if not payload:
+            return False, SystemActions._txt(
+                "A inspecao da rede Docker nao retornou dados.",
+                "Docker network inspection returned no data.",
+            )
+
+        network = payload[0] if isinstance(payload[0], dict) else {}
+        ipam = network.get("IPAM") if isinstance(network, dict) else {}
+        configs = ipam.get("Config") if isinstance(ipam, dict) else []
+        config0 = configs[0] if configs and isinstance(configs[0], dict) else {}
+        subnet = (config0.get("Subnet") or "").strip()
+        gateway = (config0.get("Gateway") or "").strip()
+        return True, {
+            "network_name": network_name,
+            "subnet": subnet,
+            "gateway": gateway,
+        }
+
+    @staticmethod
+    def _upsert_pg_hba_rule(conf_path: str, database: str, db_user: str, cidr: str, auth_method: str):
+        if not os.path.exists(conf_path):
+            return False, SystemActions._txt(
+                f"Arquivo de configuracao nao encontrado: {conf_path}",
+                f"Configuration file not found: {conf_path}",
+            )
+        try:
+            with open(conf_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        except Exception as exc:
+            return False, str(exc)
+
+        rule = f"host    {database}    {db_user}    {cidr}    {auth_method}\n"
+        pattern = re.compile(
+            rf"^\s*host\s+{re.escape(database)}\s+{re.escape(db_user)}\s+{re.escape(cidr)}\s+\S+"
+        )
+        replaced = False
+        output = []
+        for line in lines:
+            if pattern.match(line) and not replaced:
+                output.append(rule)
+                replaced = True
+            else:
+                output.append(line)
+        if not replaced:
+            if output and not output[-1].endswith("\n"):
+                output[-1] += "\n"
+            output.append("\n" if output and output[-1].strip() else "")
+            output.append("# Added by VPS Tools for local Docker DB panel access\n")
+            output.append(rule)
+        try:
+            with open(conf_path, "w", encoding="utf-8") as f:
+                f.writelines(output)
+            return True, conf_path
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
     def _set_mongod_config(conf_path: str, bind_ip: str, port: int, auth_enabled: bool):
         if not os.path.exists(conf_path):
             return False, SystemActions._txt(
@@ -1091,6 +1194,156 @@ class SystemActions:
                 "service_status": (status_result.stdout or status_result.stderr or "").strip(),
                 "psql_test_output": (test_result.stdout or test_result.stderr or "").strip(),
                 "config_file": conf_path,
+            }
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def allow_postgresql_for_local_panel(
+        app_dir: str = "/opt/vps-tools-db-panel",
+        docker_network_name: str = "",
+        db_name: str = "hospital",
+        db_user: str = "hospital_app",
+        auth_method: str = "scram-sha-256",
+        listen_host_override: str = "",
+        docker_cidr_override: str = "",
+        postgres_port: int = 5432,
+        progress_callback=None,
+    ):
+        def update(percent: int, text: str):
+            if progress_callback:
+                progress_callback(completed=percent, description=f"[cyan]{text}[/cyan]")
+
+        try:
+            if os.name == "nt":
+                return False, SystemActions._txt(
+                    "Configuracao do PostgreSQL local para painel Docker nao suportada no Windows.",
+                    "Local PostgreSQL setup for Docker panel is not supported on Windows.",
+                )
+
+            database_value = (db_name or "").strip() or "all"
+            user_value = (db_user or "").strip() or "all"
+            if database_value != "all":
+                ok, msg = SystemActions._validate_pg_identifier(
+                    database_value,
+                    SystemActions._txt("Nome do banco", "Database name"),
+                )
+                if not ok:
+                    return False, msg
+            if user_value != "all":
+                ok, msg = SystemActions._validate_pg_identifier(
+                    user_value,
+                    SystemActions._txt("Nome do usuario", "Username"),
+                )
+                if not ok:
+                    return False, msg
+
+            auth_value = (auth_method or "").strip().lower()
+            if auth_value not in {"scram-sha-256", "md5", "password", "trust", "reject"}:
+                return False, SystemActions._txt(
+                    "Metodo de autenticacao invalido. Use scram-sha-256, md5, password, trust ou reject.",
+                    "Invalid authentication method. Use scram-sha-256, md5, password, trust or reject.",
+                )
+            if not isinstance(postgres_port, int) or not (1 <= postgres_port <= 65535):
+                return False, SystemActions._txt("Porta do PostgreSQL invalida.", "Invalid PostgreSQL port.")
+
+            update(10, SystemActions._txt("Detectando a rede Docker do painel", "Detecting the panel Docker network"))
+            network_result = SystemActions._detect_web_db_panel_network(app_dir=app_dir, docker_network_name=docker_network_name)
+            if not network_result[0]:
+                return False, network_result[1]
+            network_data = network_result[1]
+            docker_network = network_data["network_name"]
+            docker_cidr = (docker_cidr_override or "").strip() or (network_data.get("subnet") or "").strip()
+            listen_host = (listen_host_override or "").strip() or (network_data.get("gateway") or "").strip()
+            if not docker_cidr:
+                return False, SystemActions._txt(
+                    "Nao foi possivel detectar a sub-rede Docker. Informe o CIDR manualmente.",
+                    "Could not detect the Docker subnet. Provide the CIDR manually.",
+                )
+            if not listen_host:
+                return False, SystemActions._txt(
+                    "Nao foi possivel detectar o gateway do host para o painel Docker. Informe o IP manualmente.",
+                    "Could not detect the host gateway for the Docker panel. Provide the IP manually.",
+                )
+
+            update(30, SystemActions._txt("Detectando arquivos do PostgreSQL", "Detecting PostgreSQL files"))
+            conf_ok, conf_path = SystemActions._postgresql_runtime_setting("config_file")
+            if not conf_ok:
+                conf_path = SystemActions._find_postgresql_conf()
+            if not conf_path:
+                return False, SystemActions._txt(
+                    "Arquivo postgresql.conf nao encontrado.",
+                    "postgresql.conf file not found.",
+                )
+            hba_ok, hba_path = SystemActions._postgresql_runtime_setting("hba_file")
+            if not hba_ok:
+                hba_path = os.path.join(os.path.dirname(conf_path), "pg_hba.conf")
+            if not hba_path or not os.path.exists(hba_path):
+                return False, SystemActions._txt(
+                    "Arquivo pg_hba.conf nao encontrado.",
+                    "pg_hba.conf file not found.",
+                )
+
+            update(45, SystemActions._txt("Mesclando listen_addresses do PostgreSQL", "Merging PostgreSQL listen_addresses"))
+            listen_result = SystemActions._postgresql_runtime_setting("listen_addresses")
+            current_listen = listen_result[1] if listen_result[0] else "localhost"
+            if current_listen.strip() == "*":
+                merged_listen = "*"
+            else:
+                merged_tokens = []
+                for token in (current_listen or "localhost").split(","):
+                    normalized = token.strip().strip("'").strip('"')
+                    if normalized and normalized not in merged_tokens:
+                        merged_tokens.append(normalized)
+                for token in ("localhost", "127.0.0.1", listen_host):
+                    normalized = token.strip()
+                    if normalized and normalized not in merged_tokens:
+                        merged_tokens.append(normalized)
+                merged_listen = ",".join(merged_tokens)
+            ok, msg = SystemActions._replace_or_append_setting(conf_path, "listen_addresses", f"'{merged_listen}'")
+            if not ok:
+                return False, msg
+
+            update(65, SystemActions._txt("Atualizando regra do pg_hba.conf para o painel", "Updating pg_hba.conf rule for the panel"))
+            ok, msg = SystemActions._upsert_pg_hba_rule(
+                hba_path,
+                database_value,
+                user_value,
+                docker_cidr,
+                auth_value,
+            )
+            if not ok:
+                return False, msg
+
+            update(80, SystemActions._txt("Reiniciando PostgreSQL", "Restarting PostgreSQL"))
+            result = subprocess.run(["systemctl", "restart", "postgresql"], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha ao reiniciar o PostgreSQL.",
+                    "Failed to restart PostgreSQL.",
+                )
+
+            update(95, SystemActions._txt("Validando escuta do PostgreSQL", "Validating PostgreSQL listening sockets"))
+            service_status = subprocess.run(["systemctl", "status", "postgresql", "--no-pager"], capture_output=True, text=True, check=False)
+            ss_result = subprocess.run(["ss", "-ltn"], capture_output=True, text=True, check=False)
+            port_lines = []
+            if ss_result.returncode == 0:
+                target = f":{postgres_port}"
+                port_lines = [line for line in (ss_result.stdout or "").splitlines() if target in line]
+
+            update(100, SystemActions._txt("Acesso local do painel ao PostgreSQL configurado", "Local panel access to PostgreSQL configured"))
+            return True, {
+                "docker_network_name": docker_network,
+                "docker_cidr": docker_cidr,
+                "listen_host": listen_host,
+                "db_name": database_value,
+                "db_user": user_value,
+                "auth_method": auth_value,
+                "listen_addresses": merged_listen,
+                "config_file": conf_path,
+                "pg_hba_file": hba_path,
+                "service_status": (service_status.stdout or service_status.stderr or "").strip(),
+                "ss_output": "\n".join(port_lines).strip(),
             }
         except Exception as exc:
             return False, str(exc)

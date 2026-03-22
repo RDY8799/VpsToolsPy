@@ -434,6 +434,92 @@ class VPSToolsApp:
             self.ui.print_error(data)
         self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
 
+    def _postgres_panel_access_flow(self):
+        if not self._confirm("liberacao do PostgreSQL para painel Docker local"):
+            return
+
+        app_dir = self._prompt_default("Diretorio do painel Docker", "Docker panel directory", "/opt/vps-tools-db-panel")
+        docker_network_name = self._prompt_default(
+            "Nome da rede Docker do painel (vazio = detectar)",
+            "Panel Docker network name (empty = auto-detect)",
+            "",
+        )
+        db_name = self._prompt_default(
+            "Banco permitido no pg_hba (all = qualquer banco)",
+            "Database allowed in pg_hba (all = any database)",
+            "hospital",
+        )
+        db_user = self._prompt_default(
+            "Usuario permitido no pg_hba (all = qualquer usuario)",
+            "User allowed in pg_hba (all = any user)",
+            "hospital_app",
+        )
+        auth_method = self._prompt_default(
+            "Metodo de autenticacao (scram-sha-256/md5/password/trust/reject)",
+            "Authentication method (scram-sha-256/md5/password/trust/reject)",
+            "scram-sha-256",
+        )
+        listen_host_override = self._prompt_default(
+            "IP adicional em listen_addresses (vazio = detectar gateway Docker)",
+            "Extra IP in listen_addresses (empty = detect Docker gateway)",
+            "",
+        )
+        docker_cidr_override = self._prompt_default(
+            "CIDR Docker para o pg_hba (vazio = detectar automaticamente)",
+            "Docker CIDR for pg_hba (empty = auto-detect)",
+            "",
+        )
+        postgres_port = self._prompt_int_default("Porta do PostgreSQL", "PostgreSQL port", 5432)
+
+        self.ui.print_info(
+            self._txt(
+                "O script vai detectar a rede real do painel Docker e liberar apenas esse acesso local no PostgreSQL, sem abrir 5432 publicamente.",
+                "The script will detect the real Docker panel network and allow only that local access in PostgreSQL, without opening 5432 publicly.",
+            )
+        )
+
+        def worker(update):
+            return self.sys_actions.allow_postgresql_for_local_panel(
+                app_dir=app_dir,
+                docker_network_name=docker_network_name,
+                db_name=db_name,
+                db_user=db_user,
+                auth_method=auth_method,
+                listen_host_override=listen_host_override,
+                docker_cidr_override=docker_cidr_override,
+                postgres_port=postgres_port,
+                progress_callback=update,
+            )
+
+        ok, data = self.ui.run_animated_task(
+            self._txt("Liberando PostgreSQL para painel local", "Allowing PostgreSQL for local panel"),
+            worker,
+        )
+        if ok:
+            summary = (
+                f"[white]{self._txt('Rede Docker', 'Docker network')}:[/white] [cyan]{data['docker_network_name']}[/cyan]\n"
+                f"[white]{self._txt('CIDR liberado', 'Allowed CIDR')}:[/white] [cyan]{data['docker_cidr']}[/cyan]\n"
+                f"[white]{self._txt('Host adicional', 'Extra host')}:[/white] [cyan]{data['listen_host']}[/cyan]\n"
+                f"[white]{self._txt('Banco', 'Database')}:[/white] [cyan]{data['db_name']}[/cyan]\n"
+                f"[white]{self._txt('Usuario', 'User')}:[/white] [cyan]{data['db_user']}[/cyan]\n"
+                f"[white]{self._txt('Auth', 'Auth')}:[/white] [cyan]{data['auth_method']}[/cyan]\n"
+                f"[white]listen_addresses:[/white] [cyan]{data['listen_addresses']}[/cyan]\n"
+                f"[white]postgresql.conf:[/white] [cyan]{data['config_file']}[/cyan]\n"
+                f"[white]pg_hba.conf:[/white] [cyan]{data['pg_hba_file']}[/cyan]\n\n"
+                f"[white]ss -ltn | grep :5432[/white]\n{data['ss_output'][-1500:]}\n\n"
+                f"[white]systemctl status postgresql[/white]\n{data['service_status'][-2500:]}"
+            )
+            self.ui.console.print(
+                Panel(
+                    summary,
+                    title=self._txt("POSTGRESQL LIBERADO PARA O PAINEL", "POSTGRESQL ALLOWED FOR THE PANEL"),
+                    border_style="green",
+                )
+            )
+        else:
+            self.ui.print_error(data)
+        self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+
     def _spring_backend_setup_flow(self):
         if not self._confirm("preparo do backend spring boot"):
             return
@@ -1059,6 +1145,7 @@ class VPSToolsApp:
                 "10": self._txt("CONFIGURAR HTTPS COM CERTBOT", "CONFIGURE HTTPS WITH CERTBOT"),
                 "11": self._txt("INSTALAR PAINEL WEB DE BANCOS", "INSTALL WEB DATABASE PANEL"),
                 "12": self._txt("GERENCIAR PAINEL WEB DE BANCOS", "MANAGE WEB DATABASE PANEL"),
+                "13": self._txt("LIBERAR POSTGRESQL PARA PAINEL DOCKER LOCAL", "ALLOW POSTGRESQL FOR LOCAL DOCKER PANEL"),
                 "00": self.lang.t("menu.back", "VOLTAR"),
             }
             self.ui.draw_menu(options, self._txt("BANCO DE DADOS / BACKEND", "DATABASE / BACKEND"))
@@ -1088,6 +1175,8 @@ class VPSToolsApp:
                 self._web_db_panel_setup_flow()
             elif option == "12":
                 self._web_db_panel_manage_flow()
+            elif option == "13":
+                self._postgres_panel_access_flow()
             elif option == "00":
                 break
             else:
