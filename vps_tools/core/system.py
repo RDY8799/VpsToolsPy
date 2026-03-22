@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import shlex
@@ -156,6 +157,254 @@ class SystemActions:
         try:
             with open(conf_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def _replace_or_append_plain_setting(conf_path: str, key: str, value: str):
+        if not os.path.exists(conf_path):
+            return False, f"Arquivo de configuracao nao encontrado: {conf_path}"
+        try:
+            with open(conf_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        except Exception as exc:
+            return False, str(exc)
+
+        pattern = re.compile(rf"^\s*#?\s*{re.escape(key)}\b")
+        new_line = f"{key} {value}\n"
+        replaced = False
+        output = []
+        for line in lines:
+            if pattern.match(line) and not replaced:
+                output.append(new_line)
+                replaced = True
+            else:
+                output.append(line)
+        if not replaced:
+            if output and not output[-1].endswith("\n"):
+                output[-1] += "\n"
+            output.append(new_line)
+        try:
+            with open(conf_path, "w", encoding="utf-8") as f:
+                f.writelines(output)
+            return True, conf_path
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def _set_mongod_config(conf_path: str, bind_ip: str, port: int, auth_enabled: bool):
+        if not os.path.exists(conf_path):
+            return False, f"Arquivo de configuracao nao encontrado: {conf_path}"
+        try:
+            with open(conf_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except Exception as exc:
+            return False, str(exc)
+
+        if re.search(r"(?m)^\s*bindIp:\s*", content):
+            content = re.sub(r"(?m)^\s*bindIp:\s*.*$", f"  bindIp: {bind_ip}", content, count=1)
+        elif re.search(r"(?m)^net:\s*$", content):
+            content = re.sub(r"(?m)^net:\s*$", f"net:\n  port: {port}\n  bindIp: {bind_ip}", content, count=1)
+        else:
+            content += f"\nnet:\n  port: {port}\n  bindIp: {bind_ip}\n"
+
+        if re.search(r"(?m)^\s*port:\s*", content):
+            content = re.sub(r"(?m)^\s*port:\s*.*$", f"  port: {port}", content, count=1)
+
+        auth_value = "enabled" if auth_enabled else "disabled"
+        if re.search(r"(?m)^security:\s*$", content):
+            if re.search(r"(?m)^\s*authorization:\s*", content):
+                content = re.sub(r"(?m)^\s*authorization:\s*.*$", f"  authorization: {auth_value}", content, count=1)
+            else:
+                content = re.sub(r"(?m)^security:\s*$", f"security:\n  authorization: {auth_value}", content, count=1)
+        elif re.search(r"(?m)^#\s*security:\s*$", content):
+            content = re.sub(r"(?m)^#\s*security:\s*$", f"security:\n  authorization: {auth_value}", content, count=1)
+        else:
+            content += f"\nsecurity:\n  authorization: {auth_value}\n"
+
+        return SystemActions._write_text_file(conf_path, content)
+
+    @staticmethod
+    def _write_text_file(path: str, content: str, mode: int | None = None):
+        try:
+            parent = os.path.dirname(path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+            if mode is not None:
+                os.chmod(path, mode)
+            return True, path
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def _ubuntu_codename() -> str:
+        os_release = SystemActions._read_os_release()
+        for key in ("VERSION_CODENAME", "UBUNTU_CODENAME"):
+            value = (os_release.get(key) or "").strip()
+            if value:
+                return value
+        return ""
+
+    @staticmethod
+    def _validate_service_name(value: str):
+        if not value:
+            return False, "Nome do servico nao pode ser vazio."
+        if not re.match(r"^[A-Za-z0-9_.@-]+$", value):
+            return False, "Nome do servico invalido. Use apenas letras, numeros, ponto, underscore, @ ou -."
+        return True, ""
+
+    @staticmethod
+    def _env_file_content(env_vars: dict[str, str]) -> str:
+        lines = []
+        for key, value in env_vars.items():
+            safe_key = re.sub(r"[^A-Za-z0-9_]", "_", key or "").upper()
+            lines.append(f"{safe_key}={shlex.quote(str(value))}")
+        return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def write_environment_file(path: str, env_vars: dict[str, str], owner_user: str = ""):
+        ok, msg = SystemActions._write_text_file(path, SystemActions._env_file_content(env_vars), mode=0o600)
+        if not ok:
+            return False, msg
+        if owner_user and SystemActions._linux_user_exists(owner_user):
+            result = subprocess.run(["chown", f"{owner_user}:{owner_user}", path], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or f"Falha ao ajustar dono de {path}."
+        return True, path
+
+    @staticmethod
+    def create_systemd_service(
+        service_name: str,
+        description: str,
+        exec_start: str,
+        working_dir: str,
+        run_user: str,
+        environment_file: str = "",
+        exec_stop: str = "",
+        restart_policy: str = "always",
+        restart_sec: int = 5,
+        progress_callback=None,
+    ):
+        def update(percent: int, text: str):
+            if progress_callback:
+                progress_callback(completed=percent, description=f"[cyan]{text}[/cyan]")
+
+        try:
+            if os.name == "nt":
+                return False, "systemd nao suportado no Windows."
+            ok, msg = SystemActions._validate_service_name(service_name)
+            if not ok:
+                return False, msg
+            if not exec_start.strip():
+                return False, "ExecStart nao pode ser vazio."
+            if not working_dir.startswith("/"):
+                return False, "WorkingDirectory deve ser absoluto."
+
+            run_user = SystemActions._resolve_linux_owner(run_user or "root")
+            unit_path = f"/etc/systemd/system/{service_name}.service"
+            lines = [
+                "[Unit]",
+                f"Description={description or service_name}",
+                "After=network.target",
+                "",
+                "[Service]",
+                "Type=simple",
+                f"User={run_user}",
+                f"Group={run_user}",
+                f"WorkingDirectory={working_dir}",
+            ]
+            if environment_file:
+                lines.append(f"EnvironmentFile={environment_file}")
+            lines.extend(
+                [
+                    f"ExecStart={exec_start}",
+                ]
+            )
+            if exec_stop.strip():
+                lines.append(f"ExecStop={exec_stop}")
+            lines.extend(
+                [
+                    f"Restart={restart_policy}",
+                    f"RestartSec={restart_sec}",
+                    "",
+                    "[Install]",
+                    "WantedBy=multi-user.target",
+                    "",
+                ]
+            )
+
+            update(15, "Gravando unit file")
+            ok, msg = SystemActions._write_text_file(unit_path, "\n".join(lines))
+            if not ok:
+                return False, msg
+
+            update(45, "Recarregando systemd")
+            for cmd in (
+                ["systemctl", "daemon-reload"],
+                ["systemctl", "enable", service_name],
+                ["systemctl", "restart", service_name],
+            ):
+                result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                if result.returncode != 0:
+                    return False, result.stderr.strip() or result.stdout.strip() or f"Falha ao executar: {' '.join(cmd)}"
+
+            update(80, "Coletando status do servico")
+            status_result = subprocess.run(
+                ["systemctl", "status", service_name, "--no-pager"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            update(100, "Servico criado")
+            return True, {
+                "service_name": service_name,
+                "unit_path": unit_path,
+                "run_user": run_user,
+                "working_dir": working_dir,
+                "environment_file": environment_file,
+                "exec_start": exec_start,
+                "status": (status_result.stdout or status_result.stderr or "").strip(),
+            }
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def systemd_service_action(service_name: str, action: str, lines: int = 120):
+        try:
+            ok, msg = SystemActions._validate_service_name(service_name)
+            if not ok:
+                return False, msg
+            if action not in {"start", "stop", "restart", "status", "enable", "disable", "logs"}:
+                return False, f"Acao systemd invalida: {action}"
+
+            if action == "logs":
+                result = subprocess.run(
+                    ["journalctl", "-u", service_name, "-n", str(lines), "--no-pager"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            elif action == "status":
+                result = subprocess.run(
+                    ["systemctl", "status", service_name, "--no-pager"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            else:
+                result = subprocess.run(["systemctl", action, service_name], capture_output=True, text=True, check=False)
+                if result.returncode == 0:
+                    status = subprocess.run(
+                        ["systemctl", "status", service_name, "--no-pager"],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    result = status
+            text_out = (result.stdout or result.stderr or "").strip()
+            return result.returncode == 0, text_out
         except Exception as exc:
             return False, str(exc)
 
@@ -475,6 +724,456 @@ class SystemActions:
                     "nao abra 5432",
                     "nao abra 80/443 ate concluir a instalacao do backend",
                 ],
+            }
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def install_mysql_like_database(
+        flavor: str,
+        db_name: str,
+        db_user: str,
+        db_password: str,
+        bind_address: str = "127.0.0.1",
+        port: int = 3306,
+        grant_host: str = "localhost",
+        progress_callback=None,
+    ):
+        def update(percent: int, text: str):
+            if progress_callback:
+                progress_callback(completed=percent, description=f"[cyan]{text}[/cyan]")
+
+        try:
+            if os.name == "nt":
+                return False, "Instalacao de banco nao suportada no Windows."
+            if SystemActions._package_manager() != "apt":
+                return False, "Instalacao automatica disponivel apenas para Debian/Ubuntu."
+            if flavor not in {"mysql", "mariadb"}:
+                return False, f"Sabor de banco invalido: {flavor}"
+            ok, msg = SystemActions._validate_pg_identifier(db_name, "Nome do banco")
+            if not ok:
+                return False, msg
+            ok, msg = SystemActions._validate_pg_identifier(db_user, "Nome do usuario")
+            if not ok:
+                return False, msg
+            if not db_password:
+                return False, "Senha do banco nao pode ser vazia."
+            if not (1 <= port <= 65535):
+                return False, "Porta invalida."
+
+            package_name = "mysql-server" if flavor == "mysql" else "mariadb-server"
+            service_name = "mysql" if flavor == "mysql" else "mariadb"
+            conf_dir = "/etc/mysql/mysql.conf.d" if flavor == "mysql" else "/etc/mysql/mariadb.conf.d"
+            conf_path = os.path.join(conf_dir, "zz-vps-tools.cnf")
+
+            update(5, "Atualizando cache de pacotes")
+            result = subprocess.run(["apt-get", "update", "-y"], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or "Falha no apt-get update."
+
+            update(20, f"Instalando {package_name}")
+            result = subprocess.run(["apt-get", "install", "-y", package_name], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or f"Falha na instalacao do {package_name}."
+
+            update(40, "Aplicando configuracao de bind/porta")
+            conf_content = (
+                "[mysqld]\n"
+                f"bind-address = {bind_address}\n"
+                f"port = {port}\n"
+            )
+            ok, msg = SystemActions._write_text_file(conf_path, conf_content)
+            if not ok:
+                return False, msg
+
+            for cmd in (["systemctl", "enable", service_name], ["systemctl", "restart", service_name]):
+                result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                if result.returncode != 0:
+                    return False, result.stderr.strip() or result.stdout.strip() or f"Falha ao executar: {' '.join(cmd)}"
+
+            password_sql = db_password.replace("'", "''")
+            grant_host_sql = grant_host.replace("'", "''")
+            sql = (
+                f"CREATE DATABASE IF NOT EXISTS `{db_name}`;"
+                f"CREATE USER IF NOT EXISTS '{db_user}'@'{grant_host_sql}' IDENTIFIED BY '{password_sql}';"
+                f"ALTER USER '{db_user}'@'{grant_host_sql}' IDENTIFIED BY '{password_sql}';"
+                f"GRANT ALL PRIVILEGES ON `{db_name}`.* TO '{db_user}'@'{grant_host_sql}';"
+                "FLUSH PRIVILEGES;"
+            )
+
+            update(65, "Criando banco e usuario")
+            result = subprocess.run(["mysql", "-e", sql], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or "Falha ao criar banco/usuario."
+
+            status_result = subprocess.run(
+                ["systemctl", "status", service_name, "--no-pager"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            jdbc_scheme = "mysql" if flavor == "mysql" else "mariadb"
+            update(100, "Banco configurado")
+            return True, {
+                "flavor": flavor,
+                "service_name": service_name,
+                "db_name": db_name,
+                "db_user": db_user,
+                "db_password": db_password,
+                "bind_address": bind_address,
+                "port": port,
+                "grant_host": grant_host,
+                "config_file": conf_path,
+                "jdbc_url": f"jdbc:{jdbc_scheme}://{bind_address}:{port}/{db_name}",
+                "service_status": (status_result.stdout or status_result.stderr or "").strip(),
+            }
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def install_mongodb_database(
+        app_db: str,
+        app_user: str,
+        app_password: str,
+        bind_ip: str = "127.0.0.1",
+        port: int = 27017,
+        enable_auth: bool = True,
+        progress_callback=None,
+    ):
+        def update(percent: int, text: str):
+            if progress_callback:
+                progress_callback(completed=percent, description=f"[cyan]{text}[/cyan]")
+
+        try:
+            if os.name == "nt":
+                return False, "Instalacao do MongoDB nao suportada no Windows."
+            if SystemActions._package_manager() != "apt":
+                return False, "Instalacao automatica disponivel apenas para Debian/Ubuntu."
+            ok, msg = SystemActions._validate_pg_identifier(app_db, "Nome do banco")
+            if not ok:
+                return False, msg
+            ok, msg = SystemActions._validate_pg_identifier(app_user, "Nome do usuario")
+            if not ok:
+                return False, msg
+            if not app_password:
+                return False, "Senha do banco nao pode ser vazia."
+            codename = SystemActions._ubuntu_codename()
+            if codename not in {"focal", "jammy", "noble"}:
+                return False, f"Ubuntu sem suporte oficial configurado para MongoDB 8.0: {codename or 'desconhecido'}"
+
+            update(5, "Instalando dependencias")
+            result = subprocess.run(["apt-get", "update", "-y"], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or "Falha no apt-get update."
+            result = subprocess.run(["apt-get", "install", "-y", "gnupg", "curl"], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or "Falha ao instalar gnupg/curl."
+
+            update(25, "Configurando repositorio oficial do MongoDB")
+            key_cmd = [
+                "bash",
+                "-lc",
+                "curl -fsSL https://www.mongodb.org/static/pgp/server-8.0.asc | gpg -o /usr/share/keyrings/mongodb-server-8.0.gpg --dearmor",
+            ]
+            result = subprocess.run(key_cmd, capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or "Falha ao importar chave do MongoDB."
+            repo_line = (
+                f"deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] "
+                f"https://repo.mongodb.org/apt/ubuntu {codename}/mongodb-org/8.0 multiverse\n"
+            )
+            ok, msg = SystemActions._write_text_file("/etc/apt/sources.list.d/mongodb-org-8.0.list", repo_line)
+            if not ok:
+                return False, msg
+
+            update(45, "Instalando MongoDB")
+            result = subprocess.run(["apt-get", "update", "-y"], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or "Falha ao atualizar repositorio MongoDB."
+            result = subprocess.run(["apt-get", "install", "-y", "mongodb-org"], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or "Falha na instalacao do MongoDB."
+
+            update(60, "Aplicando bind/auth no mongod.conf")
+            ok, msg = SystemActions._set_mongod_config("/etc/mongod.conf", bind_ip=bind_ip, port=port, auth_enabled=False)
+            if not ok:
+                return False, msg
+
+            for cmd in (["systemctl", "enable", "mongod"], ["systemctl", "restart", "mongod"]):
+                result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                if result.returncode != 0:
+                    return False, result.stderr.strip() or result.stdout.strip() or f"Falha ao executar: {' '.join(cmd)}"
+
+            script = (
+                f"const dbName = {json.dumps(app_db)};"
+                f"const userName = {json.dumps(app_user)};"
+                f"const pwd = {json.dumps(app_password)};"
+                "const dbRef = db.getSiblingDB(dbName);"
+                "if (dbRef.getUser(userName)) { dbRef.updateUser(userName, {pwd: pwd, roles:[{role:'readWrite', db: dbName}]}); }"
+                " else { dbRef.createUser({user: userName, pwd: pwd, roles:[{role:'readWrite', db: dbName}]}); }"
+            )
+            result = subprocess.run(["mongosh", "--quiet", "--eval", script], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or "Falha ao criar usuario no MongoDB."
+
+            if enable_auth:
+                ok, msg = SystemActions._set_mongod_config("/etc/mongod.conf", bind_ip=bind_ip, port=port, auth_enabled=True)
+                if not ok:
+                    return False, msg
+                result = subprocess.run(["systemctl", "restart", "mongod"], capture_output=True, text=True, check=False)
+                if result.returncode != 0:
+                    return False, result.stderr.strip() or result.stdout.strip() or "Falha ao reiniciar mongod com auth."
+
+            status_result = subprocess.run(
+                ["systemctl", "status", "mongod", "--no-pager"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            update(100, "MongoDB configurado")
+            return True, {
+                "db_name": app_db,
+                "db_user": app_user,
+                "db_password": app_password,
+                "bind_ip": bind_ip,
+                "port": port,
+                "auth_enabled": enable_auth,
+                "config_file": "/etc/mongod.conf",
+                "connection_string": f"mongodb://{app_user}:{app_password}@{bind_ip}:{port}/{app_db}?authSource={app_db}",
+                "service_status": (status_result.stdout or status_result.stderr or "").strip(),
+            }
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def install_redis_server(
+        bind_address: str = "127.0.0.1",
+        port: int = 6379,
+        password: str = "",
+        progress_callback=None,
+    ):
+        def update(percent: int, text: str):
+            if progress_callback:
+                progress_callback(completed=percent, description=f"[cyan]{text}[/cyan]")
+
+        try:
+            if os.name == "nt":
+                return False, "Instalacao do Redis nao suportada no Windows."
+            if SystemActions._package_manager() != "apt":
+                return False, "Instalacao automatica disponivel apenas para Debian/Ubuntu."
+            if not (1 <= port <= 65535):
+                return False, "Porta invalida."
+
+            update(5, "Instalando dependencias")
+            result = subprocess.run(["apt-get", "update", "-y"], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or "Falha no apt-get update."
+            result = subprocess.run(["apt-get", "install", "-y", "curl", "gpg"], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or "Falha ao instalar dependencias do Redis."
+
+            update(25, "Configurando repositorio oficial do Redis")
+            key_cmd = [
+                "bash",
+                "-lc",
+                "curl -fsSL https://packages.redis.io/gpg | gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg",
+            ]
+            result = subprocess.run(key_cmd, capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or "Falha ao importar chave do Redis."
+            repo_cmd = [
+                "bash",
+                "-lc",
+                "echo 'deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb "
+                "$(lsb_release -cs) main' > /etc/apt/sources.list.d/redis.list",
+            ]
+            result = subprocess.run(repo_cmd, capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or "Falha ao criar repositorio do Redis."
+
+            update(45, "Instalando Redis")
+            result = subprocess.run(["apt-get", "update", "-y"], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or "Falha ao atualizar repositorio Redis."
+            result = subprocess.run(["apt-get", "install", "-y", "redis-server"], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or "Falha na instalacao do Redis."
+
+            conf_path = "/etc/redis/redis.conf"
+            update(65, "Aplicando bind/porta/senha")
+            ok, msg = SystemActions._replace_or_append_plain_setting(conf_path, "bind", bind_address)
+            if not ok:
+                return False, msg
+            ok, msg = SystemActions._replace_or_append_plain_setting(conf_path, "port", str(port))
+            if not ok:
+                return False, msg
+            if password:
+                ok, msg = SystemActions._replace_or_append_plain_setting(conf_path, "requirepass", password)
+                if not ok:
+                    return False, msg
+
+            for cmd in (["systemctl", "enable", "redis-server"], ["systemctl", "restart", "redis-server"]):
+                result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                if result.returncode != 0:
+                    return False, result.stderr.strip() or result.stdout.strip() or f"Falha ao executar: {' '.join(cmd)}"
+
+            status_result = subprocess.run(
+                ["systemctl", "status", "redis-server", "--no-pager"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            update(100, "Redis configurado")
+            return True, {
+                "bind_address": bind_address,
+                "port": port,
+                "password": password,
+                "config_file": conf_path,
+                "connection_string": f"redis://:{password}@{bind_address}:{port}/0" if password else f"redis://{bind_address}:{port}/0",
+                "service_status": (status_result.stdout or status_result.stderr or "").strip(),
+            }
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def configure_nginx_reverse_proxy(
+        site_name: str,
+        server_names: list[str],
+        upstream_host: str,
+        upstream_port: int,
+        client_max_body_size: str = "20m",
+        proxy_buffering: bool = False,
+        progress_callback=None,
+    ):
+        def update(percent: int, text: str):
+            if progress_callback:
+                progress_callback(completed=percent, description=f"[cyan]{text}[/cyan]")
+
+        try:
+            ok, msg = SystemActions._validate_service_name(site_name)
+            if not ok:
+                return False, msg
+            if not server_names:
+                return False, "Informe ao menos um dominio/server_name."
+            if not (1 <= upstream_port <= 65535):
+                return False, "Porta upstream invalida."
+
+            update(5, "Instalando Nginx")
+            result = subprocess.run(["apt-get", "update", "-y"], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or "Falha no apt-get update."
+            result = subprocess.run(["apt-get", "install", "-y", "nginx"], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or "Falha na instalacao do Nginx."
+
+            server_name_line = " ".join(server_names)
+            conf_content = (
+                "server {\n"
+                "    listen 80;\n"
+                "    listen [::]:80;\n"
+                f"    server_name {server_name_line};\n"
+                f"    client_max_body_size {client_max_body_size};\n\n"
+                "    location / {\n"
+                f"        proxy_pass http://{upstream_host}:{upstream_port};\n"
+                "        proxy_http_version 1.1;\n"
+                "        proxy_set_header Host $host;\n"
+                "        proxy_set_header Upgrade $http_upgrade;\n"
+                "        proxy_set_header Connection \"upgrade\";\n"
+                "        proxy_set_header X-Real-IP $remote_addr;\n"
+                "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
+                f"        proxy_buffering {'on' if proxy_buffering else 'off'};\n"
+                "    }\n"
+                "}\n"
+            )
+
+            available = f"/etc/nginx/sites-available/{site_name}"
+            enabled = f"/etc/nginx/sites-enabled/{site_name}"
+            update(35, "Gravando virtual host")
+            ok, msg = SystemActions._write_text_file(available, conf_content)
+            if not ok:
+                return False, msg
+            if not os.path.exists(enabled):
+                os.symlink(available, enabled)
+
+            update(60, "Validando configuracao do Nginx")
+            result = subprocess.run(["nginx", "-t"], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or "Falha no nginx -t."
+
+            for cmd in (["systemctl", "enable", "nginx"], ["systemctl", "restart", "nginx"]):
+                result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                if result.returncode != 0:
+                    return False, result.stderr.strip() or result.stdout.strip() or f"Falha ao executar: {' '.join(cmd)}"
+
+            status_result = subprocess.run(
+                ["systemctl", "status", "nginx", "--no-pager"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            update(100, "Reverse proxy configurado")
+            return True, {
+                "site_name": site_name,
+                "server_names": server_name_line,
+                "config_file": available,
+                "upstream": f"http://{upstream_host}:{upstream_port}",
+                "service_status": (status_result.stdout or status_result.stderr or "").strip(),
+            }
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def setup_certbot_https(
+        domains: list[str],
+        email: str,
+        redirect_https: bool = True,
+        progress_callback=None,
+    ):
+        def update(percent: int, text: str):
+            if progress_callback:
+                progress_callback(completed=percent, description=f"[cyan]{text}[/cyan]")
+
+        try:
+            if not domains:
+                return False, "Informe ao menos um dominio."
+            if not email.strip():
+                return False, "Informe um e-mail valido."
+
+            update(10, "Instalando Certbot e plugin Nginx")
+            result = subprocess.run(["apt-get", "update", "-y"], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or "Falha no apt-get update."
+            result = subprocess.run(
+                ["apt-get", "install", "-y", "certbot", "python3-certbot-nginx"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or "Falha na instalacao do Certbot."
+
+            update(45, "Emitindo certificado")
+            cmd = ["certbot", "--nginx", "--non-interactive", "--agree-tos", "-m", email]
+            if redirect_https:
+                cmd.append("--redirect")
+            for domain in domains:
+                cmd.extend(["-d", domain])
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or "Falha ao emitir certificado HTTPS."
+
+            update(80, "Validando renovacao")
+            renew = subprocess.run(["certbot", "renew", "--dry-run"], capture_output=True, text=True, check=False)
+            if renew.returncode != 0:
+                return False, renew.stderr.strip() or renew.stdout.strip() or "Falha no teste de renovacao do Certbot."
+
+            timer = subprocess.run(["systemctl", "status", "certbot.timer", "--no-pager"], capture_output=True, text=True, check=False)
+            update(100, "HTTPS configurado")
+            return True, {
+                "domains": ", ".join(domains),
+                "email": email,
+                "timer_status": (timer.stdout or timer.stderr or "").strip(),
+                "certbot_output": (result.stdout or result.stderr or "").strip(),
             }
         except Exception as exc:
             return False, str(exc)

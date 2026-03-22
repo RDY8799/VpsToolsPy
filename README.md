@@ -33,11 +33,23 @@ Suite de gerenciamento de VPS em Python para automacao de servicos, usuarios e f
 - Ferramentas do sistema:
   - Atualizacao do sistema
   - Criacao de swap
-  - Instalacao de PostgreSQL local com criacao de banco/usuario
-  - Preparo de backend Spring Boot na EC2 (Java 17, `/opt/celiora`, clone opcional e comandos de subida)
   - Teste de velocidade
   - Criacao de comando global (ex: `menu`)
   - Desinstalacao completa
+- Banco de Dados / Backend:
+  - painel compacto com status `ATIVO/INATIVO` de PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Nginx e Certbot
+  - PostgreSQL local com criacao de banco/usuario, bind configuravel e JDBC configuravel
+  - MySQL com criacao de banco/usuario
+  - MariaDB com criacao de banco/usuario
+  - MongoDB com repositório oficial, usuario da aplicacao e auth opcional
+  - Redis com repositório oficial, bind/porta/senha configuraveis
+  - preparo de backend Spring Boot na EC2
+  - criacao e gerenciamento de servico `systemd`
+  - Nginx reverse proxy configuravel
+  - HTTPS com Certbot
+- Internacionalizacao:
+  - strings externas em `vps_tools/i18n/strings.json`
+  - suporte atual a PT/EN com base pronta para adicionar muitas linguas
 
 ## Requisitos
 
@@ -116,9 +128,30 @@ Modulo dedicado para VNC com:
    - `01` Instalador/configuracao de servicos
    - `02` Gerenciamento de usuarios
    - `03` Ferramentas do sistema
+   - `04` Banco de Dados / Backend
 3. Todos os menus aceitam `1` e `01` (ou equivalente)
-4. Acoes criticas pedem confirmacao
+4. Acoes obvias aceitam `Enter` como confirmacao padrao; acoes destrutivas continuam pedindo confirmacao explicita
 5. Selecao de usuario suporta setas + Enter ou digitacao manual
+
+## Banco de Dados / Backend
+
+No menu principal:
+
+- `Banco de Dados / Backend`
+
+O submenu concentra os fluxos de deploy e dados:
+
+- PostgreSQL
+- MySQL
+- MariaDB
+- MongoDB
+- Redis
+- Spring Boot
+- systemd
+- Nginx
+- HTTPS com Certbot
+
+Esse menu abre com um painel limpo de status dos componentes principais, mostrando apenas se cada item esta ativo ou inativo.
 
 ## Comando global (`menu`)
 
@@ -162,6 +195,7 @@ Ou use o modulo interno:
 ```text
 vps_tools/
   core/
+  i18n/
   services/
   ui/
   main.py

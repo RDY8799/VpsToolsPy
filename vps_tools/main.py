@@ -102,6 +102,8 @@ class VPSToolsApp:
             "create",
             "instalacao",
             "installation",
+            "configuracao",
+            "configuration",
             "inicio do servico",
             "service start",
             "reinicio do servico",
@@ -177,6 +179,13 @@ class VPSToolsApp:
                 "configuracao de desktop VNC": "VNC desktop configuration",
                 "criacao de banco de dados postgresql local": "local PostgreSQL database setup",
                 "preparo do backend spring boot": "Spring Boot backend preparation",
+                "instalacao do banco mysql": "MySQL database setup",
+                "instalacao do banco mariadb": "MariaDB database setup",
+                "instalacao do banco mongodb": "MongoDB database setup",
+                "instalacao do banco redis": "Redis setup",
+                "configuracao de reverse proxy nginx": "Nginx reverse proxy setup",
+                "configuracao de https com certbot": "HTTPS with Certbot setup",
+                "criacao de servico systemd generico": "generic systemd service creation",
             }
             for k, v in action_map.items():
                 if action == k or action.startswith(k + " "):
@@ -310,6 +319,51 @@ class VPSToolsApp:
                 return False
             self.ui.print_error(self._txt("Resposta invalida.", "Invalid answer."))
 
+    def _status_badge(self, active: bool) -> str:
+        return (
+            f"[bold green]{self._txt('ATIVO', 'ACTIVE')}[/bold green]"
+            if active
+            else f"[bold red]{self._txt('INATIVO', 'INACTIVE')}[/bold red]"
+        )
+
+    def _database_backend_status_panel(self):
+        services = {
+            "PostgreSQL": ["postgresql"],
+            "MySQL": ["mysql"],
+            "MariaDB": ["mariadb"],
+            "MongoDB": ["mongod"],
+            "Redis": ["redis-server", "redis"],
+            "Nginx": ["nginx"],
+            "Certbot": ["certbot.timer", "snap.certbot.renew.timer"],
+        }
+        flat = []
+        for items in services.values():
+            flat.extend(items)
+        status_map = self.power_tools.service_status_map(flat)
+
+        table = Table(
+            title=self._txt("[bold yellow]RESUMO DO AMBIENTE[/bold yellow]", "[bold yellow]ENVIRONMENT SUMMARY[/bold yellow]"),
+            box=None,
+            show_header=True,
+            expand=True,
+        )
+        table.add_column(self._txt("Componente", "Component"), style="cyan", width=16)
+        table.add_column(self._txt("Status", "Status"), style="white", width=12)
+        table.add_column(self._txt("Observacao", "Note"), style="white")
+
+        for label, candidates in services.items():
+            active_name = next((name for name in candidates if status_map.get(name) == "active"), "")
+            active = bool(active_name)
+            note = active_name if active_name else self._txt("nao detectado", "not detected")
+            table.add_row(label, self._status_badge(active), note)
+
+        self.ui.console.print(
+            Panel(
+                table,
+                border_style="blue",
+            )
+        )
+
     def _postgres_setup_flow(self):
         if not self._confirm("criacao de banco de dados postgresql local"):
             return
@@ -418,6 +472,16 @@ class VPSToolsApp:
                 trust_forward_headers=trust_forward_headers,
                 progress_callback=update,
             )
+        env_map = {
+            "PORT": str(app_port),
+            "APP_JWT_SECRET": jwt_secret,
+            "ROOT_OWNER_EMAIL": root_owner_email,
+            "SPRING_DATASOURCE_URL": datasource_url,
+            "SPRING_DATASOURCE_USERNAME": datasource_username,
+            "SPRING_DATASOURCE_PASSWORD": datasource_password,
+            "APP_TRUST_FORWARD_HEADERS": "true" if trust_forward_headers else "false",
+            "APP_ALLOWED_ORIGIN_PATTERNS": allowed_origin_patterns,
+        }
 
         ok, data = self.ui.run_animated_task(
             self._txt("Preparando backend Spring Boot", "Preparing Spring Boot backend"),
@@ -462,6 +526,279 @@ class VPSToolsApp:
                     border_style="green",
                 )
             )
+
+            if self._prompt_bool_default("Criar servico systemd para esse backend", "Create a systemd service for this backend", True):
+                service_name = self._prompt_default("Nome do servico", "Service name", os.path.splitext(jar_name)[0] or "app")
+                service_desc = self._prompt_default("Descricao do servico", "Service description", f"{service_name} backend")
+                env_file = self._prompt_default("Arquivo .env do servico", "Service .env file", f"{app_dir}/app.env")
+
+                ok_env, env_result = self.sys_actions.write_environment_file(env_file, env_map, owner_user=owner_user)
+                if ok_env:
+                    self.ui.print_success(self._txt(f"Arquivo de ambiente criado em {env_result}", f"Environment file created at {env_result}"))
+
+                    def service_worker(update):
+                        return self.sys_actions.create_systemd_service(
+                            service_name=service_name,
+                            description=service_desc,
+                            exec_start=f"/usr/bin/java -jar {data['jar_target']}",
+                            working_dir=app_dir,
+                            run_user=owner_user,
+                            environment_file=env_result,
+                            progress_callback=update,
+                        )
+
+                    ok_service, service_data = self.ui.run_animated_task(
+                        self._txt("Criando servico systemd", "Creating systemd service"),
+                        service_worker,
+                    )
+                    if ok_service:
+                        self.ui.console.print(
+                            Panel(
+                                f"[white]Service:[/white] [cyan]{service_data['service_name']}[/cyan]\n"
+                                f"[white]Unit:[/white] [cyan]{service_data['unit_path']}[/cyan]\n"
+                                f"[white]Env file:[/white] [cyan]{service_data['environment_file']}[/cyan]\n\n"
+                                f"{service_data['status'][-2500:]}",
+                                title=self._txt("SERVICO SYSTEMD CRIADO", "SYSTEMD SERVICE CREATED"),
+                                border_style="green",
+                            )
+                        )
+                    else:
+                        self.ui.print_error(service_data)
+                else:
+                    self.ui.print_error(env_result)
+        else:
+            self.ui.print_error(data)
+        self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+
+    def _mysql_like_setup_flow(self, flavor: str):
+        label = "MySQL" if flavor == "mysql" else "MariaDB"
+        if not self._confirm(f"instalacao do banco {label.lower()}"):
+            return
+        db_name = self._prompt_default(f"Nome do banco {label}", f"{label} database name", "appdb")
+        db_user = self._prompt_default(f"Usuario do banco {label}", f"{label} database user", "app_user")
+        db_password = self._prompt_default(f"Senha do usuario {label}", f"{label} user password", "TroquePorUmaSenhaForte123!")
+        bind_address = self._prompt_default("Bind address", "Bind address", "127.0.0.1")
+        port = self._prompt_int_default("Porta do banco", "Database port", 3306)
+        grant_host = self._prompt_default("Host permitido para o usuario", "Allowed host for user", "localhost")
+
+        def worker(update):
+            return self.sys_actions.install_mysql_like_database(
+                flavor=flavor,
+                db_name=db_name,
+                db_user=db_user,
+                db_password=db_password,
+                bind_address=bind_address,
+                port=port,
+                grant_host=grant_host,
+                progress_callback=update,
+            )
+
+        ok, data = self.ui.run_animated_task(self._txt(f"Configurando {label}", f"Configuring {label}"), worker)
+        if ok:
+            self.ui.console.print(
+                Panel(
+                    f"[white]DB:[/white] [cyan]{data['db_name']}[/cyan]\n"
+                    f"[white]User:[/white] [cyan]{data['db_user']}[/cyan]\n"
+                    f"[white]JDBC:[/white] [cyan]{data['jdbc_url']}[/cyan]\n"
+                    f"[white]Config:[/white] [cyan]{data['config_file']}[/cyan]\n\n"
+                    f"{data['service_status'][-2500:]}",
+                    title=self._txt(f"{label} CONFIGURADO", f"{label.upper()} CONFIGURED"),
+                    border_style="green",
+                )
+            )
+        else:
+            self.ui.print_error(data)
+        self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+
+    def _mongodb_setup_flow(self):
+        if not self._confirm("instalacao do banco mongodb"):
+            return
+        db_name = self._prompt_default("Nome do banco MongoDB", "MongoDB database name", "appdb")
+        db_user = self._prompt_default("Usuario do banco MongoDB", "MongoDB database user", "app_user")
+        db_password = self._prompt_default("Senha do usuario MongoDB", "MongoDB user password", "TroquePorUmaSenhaForte123!")
+        bind_ip = self._prompt_default("Bind IP do MongoDB", "MongoDB bind IP", "127.0.0.1")
+        port = self._prompt_int_default("Porta do MongoDB", "MongoDB port", 27017)
+        enable_auth = self._prompt_bool_default("Ativar autenticacao do MongoDB", "Enable MongoDB authentication", True)
+
+        def worker(update):
+            return self.sys_actions.install_mongodb_database(
+                app_db=db_name,
+                app_user=db_user,
+                app_password=db_password,
+                bind_ip=bind_ip,
+                port=port,
+                enable_auth=enable_auth,
+                progress_callback=update,
+            )
+
+        ok, data = self.ui.run_animated_task(self._txt("Configurando MongoDB", "Configuring MongoDB"), worker)
+        if ok:
+            self.ui.console.print(
+                Panel(
+                    f"[white]DB:[/white] [cyan]{data['db_name']}[/cyan]\n"
+                    f"[white]User:[/white] [cyan]{data['db_user']}[/cyan]\n"
+                    f"[white]Connection string:[/white] [cyan]{data['connection_string']}[/cyan]\n"
+                    f"[white]Config:[/white] [cyan]{data['config_file']}[/cyan]\n\n"
+                    f"{data['service_status'][-2500:]}",
+                    title=self._txt("MONGODB CONFIGURADO", "MONGODB CONFIGURED"),
+                    border_style="green",
+                )
+            )
+        else:
+            self.ui.print_error(data)
+        self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+
+    def _redis_setup_flow(self):
+        if not self._confirm("instalacao do banco redis"):
+            return
+        bind_address = self._prompt_default("Bind address do Redis", "Redis bind address", "127.0.0.1")
+        port = self._prompt_int_default("Porta do Redis", "Redis port", 6379)
+        password = self._prompt_default("Senha do Redis (vazio = sem senha)", "Redis password (empty = no password)", "")
+
+        def worker(update):
+            return self.sys_actions.install_redis_server(
+                bind_address=bind_address,
+                port=port,
+                password=password,
+                progress_callback=update,
+            )
+
+        ok, data = self.ui.run_animated_task(self._txt("Configurando Redis", "Configuring Redis"), worker)
+        if ok:
+            self.ui.console.print(
+                Panel(
+                    f"[white]Connection string:[/white] [cyan]{data['connection_string']}[/cyan]\n"
+                    f"[white]Config:[/white] [cyan]{data['config_file']}[/cyan]\n\n"
+                    f"{data['service_status'][-2500:]}",
+                    title=self._txt("REDIS CONFIGURADO", "REDIS CONFIGURED"),
+                    border_style="green",
+                )
+            )
+        else:
+            self.ui.print_error(data)
+        self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+
+    def _nginx_proxy_setup_flow(self):
+        if not self._confirm("configuracao de reverse proxy nginx"):
+            return
+        site_name = self._prompt_default("Nome do site", "Site name", "app")
+        domains = self._prompt_default("Dominios/server_name separados por espaco", "Domains/server_name separated by spaces", "example.com").split()
+        upstream_host = self._prompt_default("Host upstream", "Upstream host", "127.0.0.1")
+        upstream_port = self._prompt_int_default("Porta upstream", "Upstream port", 8080)
+        client_max_body_size = self._prompt_default("client_max_body_size", "client_max_body_size", "20m")
+        proxy_buffering = self._prompt_bool_default("Ativar proxy_buffering", "Enable proxy_buffering", False)
+
+        def worker(update):
+            return self.sys_actions.configure_nginx_reverse_proxy(
+                site_name=site_name,
+                server_names=domains,
+                upstream_host=upstream_host,
+                upstream_port=upstream_port,
+                client_max_body_size=client_max_body_size,
+                proxy_buffering=proxy_buffering,
+                progress_callback=update,
+            )
+
+        ok, data = self.ui.run_animated_task(self._txt("Configurando Nginx", "Configuring Nginx"), worker)
+        if ok:
+            self.ui.console.print(
+                Panel(
+                    f"[white]Site:[/white] [cyan]{data['site_name']}[/cyan]\n"
+                    f"[white]server_name:[/white] [cyan]{data['server_names']}[/cyan]\n"
+                    f"[white]Upstream:[/white] [cyan]{data['upstream']}[/cyan]\n"
+                    f"[white]Config:[/white] [cyan]{data['config_file']}[/cyan]\n\n"
+                    f"{data['service_status'][-2500:]}",
+                    title=self._txt("NGINX CONFIGURADO", "NGINX CONFIGURED"),
+                    border_style="green",
+                )
+            )
+        else:
+            self.ui.print_error(data)
+        self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+
+    def _https_certbot_flow(self):
+        if not self._confirm("configuracao de https com certbot"):
+            return
+        domains = self._prompt_default("Dominios HTTPS separados por espaco", "HTTPS domains separated by spaces", "example.com").split()
+        email = self._prompt_default("E-mail do Let's Encrypt", "Let's Encrypt email", "admin@example.com")
+        redirect_https = self._prompt_bool_default("Redirecionar HTTP para HTTPS", "Redirect HTTP to HTTPS", True)
+
+        def worker(update):
+            return self.sys_actions.setup_certbot_https(
+                domains=domains,
+                email=email,
+                redirect_https=redirect_https,
+                progress_callback=update,
+            )
+
+        ok, data = self.ui.run_animated_task(self._txt("Configurando HTTPS", "Configuring HTTPS"), worker)
+        if ok:
+            self.ui.console.print(
+                Panel(
+                    f"[white]Domains:[/white] [cyan]{data['domains']}[/cyan]\n"
+                    f"[white]Email:[/white] [cyan]{data['email']}[/cyan]\n\n"
+                    f"[white]Certbot[/white]\n{data['certbot_output'][-1200:]}\n\n"
+                    f"[white]Timer[/white]\n{data['timer_status'][-1200:]}",
+                    title=self._txt("HTTPS CONFIGURADO", "HTTPS CONFIGURED"),
+                    border_style="green",
+                )
+            )
+        else:
+            self.ui.print_error(data)
+        self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+
+    def _generic_service_flow(self):
+        if not self._confirm("criacao de servico systemd generico"):
+            return
+        service_name = self._prompt_default("Nome do servico", "Service name", "app")
+        description = self._prompt_default("Descricao do servico", "Service description", "Application service")
+        run_user = self._prompt_default("Usuario do servico", "Service user", "ubuntu")
+        working_dir = self._prompt_default("Working directory", "Working directory", "/opt/app")
+        exec_start = self._prompt_default("ExecStart", "ExecStart", "/usr/bin/env bash -lc 'echo configure seu comando'")
+        environment_file = self._prompt_default("EnvironmentFile (vazio = sem arquivo)", "EnvironmentFile (empty = no file)", "")
+        exec_stop = self._prompt_default("ExecStop (vazio = sem comando)", "ExecStop (empty = no command)", "")
+
+        def worker(update):
+            return self.sys_actions.create_systemd_service(
+                service_name=service_name,
+                description=description,
+                exec_start=exec_start,
+                working_dir=working_dir,
+                run_user=run_user,
+                environment_file=environment_file,
+                exec_stop=exec_stop,
+                progress_callback=update,
+            )
+
+        ok, data = self.ui.run_animated_task(self._txt("Criando servico systemd", "Creating systemd service"), worker)
+        if ok:
+            self.ui.console.print(
+                Panel(
+                    f"[white]Service:[/white] [cyan]{data['service_name']}[/cyan]\n"
+                    f"[white]Unit:[/white] [cyan]{data['unit_path']}[/cyan]\n"
+                    f"[white]ExecStart:[/white] [cyan]{data['exec_start']}[/cyan]\n\n"
+                    f"{data['status'][-2500:]}",
+                    title=self._txt("SERVICO CRIADO", "SERVICE CREATED"),
+                    border_style="green",
+                )
+            )
+        else:
+            self.ui.print_error(data)
+        self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+
+    def _service_manage_flow(self):
+        service_name = self._prompt_default("Nome do servico", "Service name", "app")
+        action = self._prompt_default("Acao (status/start/stop/restart/logs)", "Action (status/start/stop/restart/logs)", "status").lower()
+        lines = self._prompt_int_default("Qtd de linhas para logs", "Log line count", 120) if action == "logs" else 120
+        ok, data = self.sys_actions.systemd_service_action(service_name=service_name, action=action, lines=lines)
+        if ok:
+            self.ui.console.print(
+                Panel(
+                    data[-4000:],
+                    title=self._txt("STATUS DO SERVICO", "SERVICE STATUS"),
+                    border_style="blue",
+                )
+            )
         else:
             self.ui.print_error(data)
         self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
@@ -469,9 +806,18 @@ class VPSToolsApp:
     def database_backend_menu(self):
         while True:
             self.ui.clear()
+            self._database_backend_status_panel()
             options = {
                 "01": self._txt("CRIAR BANCO POSTGRESQL LOCAL", "CREATE LOCAL POSTGRESQL DATABASE"),
-                "02": self._txt("PREPARAR BACKEND SPRING BOOT", "PREPARE SPRING BOOT BACKEND"),
+                "02": self._txt("CRIAR BANCO MYSQL", "CREATE MYSQL DATABASE"),
+                "03": self._txt("CRIAR BANCO MARIADB", "CREATE MARIADB DATABASE"),
+                "04": self._txt("CRIAR BANCO MONGODB", "CREATE MONGODB DATABASE"),
+                "05": self._txt("CONFIGURAR REDIS", "CONFIGURE REDIS"),
+                "06": self._txt("PREPARAR BACKEND SPRING BOOT", "PREPARE SPRING BOOT BACKEND"),
+                "07": self._txt("CRIAR SERVICO SYSTEMD GENERICO", "CREATE GENERIC SYSTEMD SERVICE"),
+                "08": self._txt("GERENCIAR SERVICO SYSTEMD", "MANAGE SYSTEMD SERVICE"),
+                "09": self._txt("CONFIGURAR NGINX REVERSE PROXY", "CONFIGURE NGINX REVERSE PROXY"),
+                "10": self._txt("CONFIGURAR HTTPS COM CERTBOT", "CONFIGURE HTTPS WITH CERTBOT"),
                 "00": self.lang.t("menu.back", "VOLTAR"),
             }
             self.ui.draw_menu(options, self._txt("BANCO DE DADOS / BACKEND", "DATABASE / BACKEND"))
@@ -480,7 +826,23 @@ class VPSToolsApp:
             if option == "1":
                 self._postgres_setup_flow()
             elif option == "2":
+                self._mysql_like_setup_flow("mysql")
+            elif option == "3":
+                self._mysql_like_setup_flow("mariadb")
+            elif option == "4":
+                self._mongodb_setup_flow()
+            elif option == "5":
+                self._redis_setup_flow()
+            elif option == "6":
                 self._spring_backend_setup_flow()
+            elif option == "7":
+                self._generic_service_flow()
+            elif option == "8":
+                self._service_manage_flow()
+            elif option == "9":
+                self._nginx_proxy_setup_flow()
+            elif option == "10":
+                self._https_certbot_flow()
             elif option == "00":
                 break
             else:
