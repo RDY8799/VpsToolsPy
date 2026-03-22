@@ -54,6 +54,40 @@ Resultado real da validacao da fase 2 no servidor:
   [x] Arquivo de ambiente encontrado e exportado: /opt/celiora/app.env
   [x] Dominios / server_names inventariados com sucesso
 
+[x] FASE 3 IMPLEMENTADA
+  [x] Adicionar destino secundario opcional ao job de backup
+  [x] Suportar copia secundaria local
+  [x] Preparar suporte a envio SCP para destino remoto
+  [x] Adicionar webhook de alerta ao job de backup
+  [x] Registrar status de destino secundario no ultimo backup
+  [x] Registrar status de alerta no ultimo backup
+  [x] Exibir destino secundario e webhook no painel de status do job
+  [x] Validar a fase 3 no servidor real
+  [x] Medir tempo real de configuracao da fase 3 no servidor
+  [x] Medir tempo real de execucao da fase 3 no servidor
+  [x] Registrar resultado real da validacao da fase 3
+
+Resultado real da validacao da fase 3 no servidor:
+  [x] Servidor validado: api.dinvendas.com
+  [x] Job de teste criado: hospital-dr-stage3
+  [x] Banco validado: PostgreSQL hospital
+  [x] Destino principal validado: /var/backups/vps-tools/hospital-dr-stage3
+  [x] Destino secundario local validado: /var/backups/vps-tools-secondary/hospital-dr-stage3
+  [x] Tempo real de configuracao da fase 3: 0.71s
+  [x] Tempo real da execucao manual da fase 3: 0.74s
+  [x] Duracao real registrada no ultimo backup: 1s
+  [x] Artefato principal gerado com sucesso
+  [x] Artefato secundario local gerado com sucesso
+  [x] Checksum principal gerado com sucesso
+  [x] Checksum secundario local gerado com sucesso
+  [x] Webhook local de teste recebeu o alerta com sucesso
+  [x] Status do destino secundario salvo com sucesso
+  [x] Status do alerta salvo com sucesso
+  [x] Reteste final apos ajustes de quoting/fallback: configuracao 0.66s
+  [x] Reteste final apos ajustes de quoting/fallback: execucao manual 0.27s
+  [x] Offsite real ainda pendente; a validacao desta fase cobre apenas copia secundaria local e webhook local
+  [x] RPO/RTO ainda nao comparados porque o perfil operacional final ainda nao foi fechado
+
 [ ] DEFINIR RPO E RTO
   [x] Criar estrutura para definir RPO por sistema, banco e ambiente
   [x] Criar estrutura para definir RTO por sistema, banco e ambiente
@@ -85,7 +119,7 @@ Resultado real da validacao da fase 2 no servidor:
   [ ] Monitorar CPU
   [ ] Monitorar falha de backup
   [ ] Testar conectividade com destino offsite
-  [ ] Disparar alertas
+  [x] Disparar alertas
   [x] Gerar relatorio/status
   [x] Registrar logs de execucao e historico de falhas
 
@@ -141,18 +175,17 @@ Resultado real da validacao da fase 2 no servidor:
   [ ] Restore em producao: manual / assistido
 
 [ ] REGRAS DE EXECUCAO CONTINUA
-  [ ] Sempre testar no servidor antes de marcar a etapa como concluida
-  [ ] Sempre medir o tempo real de cada etapa no servidor
+  [x] Sempre testar no servidor antes de marcar a etapa como concluida
+  [x] Sempre medir o tempo real de cada etapa no servidor
   [ ] Sempre comparar o tempo real com o RPO / RTO definido
-  [ ] Sempre atualizar este arquivo ao adicionar, remover ou invalidar etapas
-  [ ] Sempre detalhar a etapa de forma clara para operador sem experiencia previa
-  [ ] Sempre fazer commit detalhado por etapa relevante
-  [ ] Sempre registrar no commit o que foi feito e o resultado obtido
+  [x] Sempre atualizar este arquivo ao adicionar, remover ou invalidar etapas
+  [x] Sempre detalhar a etapa de forma clara para operador sem experiencia previa
+  [x] Sempre fazer commit detalhado por etapa relevante
+  [x] Sempre registrar no commit o que foi feito e o resultado obtido
 
 [ ] PROXIMA FASE RECOMENDADA
-  [ ] Implementar envio offsite
+  [ ] Validar envio offsite real para destino externo
   [ ] Implementar criptografia de backup
-  [ ] Implementar alerta de falha
   [ ] Implementar teste automatico de restore
   [ ] Implementar monitoramento basico de disco, RAM, CPU e SSL
 

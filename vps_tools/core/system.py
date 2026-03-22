@@ -600,6 +600,18 @@ class SystemActions:
             'DB_USER="${DB_USER:-}"\n'
             'DB_PASSWORD="${DB_PASSWORD:-}"\n'
             'AUTH_DB="${AUTH_DB:-}"\n'
+            'OFFSITE_MODE="${OFFSITE_MODE:-none}"\n'
+            'OFFSITE_PATH="${OFFSITE_PATH:-}"\n'
+            'OFFSITE_HOST="${OFFSITE_HOST:-}"\n'
+            'OFFSITE_PORT="${OFFSITE_PORT:-22}"\n'
+            'OFFSITE_USER="${OFFSITE_USER:-}"\n'
+            'OFFSITE_SSH_KEY="${OFFSITE_SSH_KEY:-}"\n'
+            'OFFSITE_KNOWN_HOSTS="${OFFSITE_KNOWN_HOSTS:-}"\n'
+            'OFFSITE_TIMEOUT_SEC="${OFFSITE_TIMEOUT_SEC:-30}"\n'
+            'ALERT_WEBHOOK_URL="${ALERT_WEBHOOK_URL:-}"\n'
+            'ALERT_ON_SUCCESS="${ALERT_ON_SUCCESS:-0}"\n'
+            'ALERT_ON_FAILURE="${ALERT_ON_FAILURE:-1}"\n'
+            'ALERT_TIMEOUT_SEC="${ALERT_TIMEOUT_SEC:-10}"\n'
             "\n"
             'timestamp="$(date -u +%Y%m%dT%H%M%SZ)"\n'
             'finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"\n'
@@ -609,11 +621,34 @@ class SystemActions:
             'status="failed"\n'
             'message=""\n'
             'tmp_dir=""\n'
+            'duration_seconds="0"\n'
+            'offsite_artifact_path=""\n'
+            'offsite_checksum_path=""\n'
+            'offsite_status="disabled"\n'
+            'offsite_message=""\n'
+            'alert_status="disabled"\n'
+            'alert_message=""\n'
             "\n"
             "write_status() {\n"
-            '  python3 - "$STATUS_FILE" "$JOB_NAME" "$ENGINE" "$status" "$artifact_path" "$checksum_path" "$finished_at" "$duration_seconds" "$message" <<\'PY\'\n'
+            '  python3 - "$STATUS_FILE" "$JOB_NAME" "$ENGINE" "$status" "$artifact_path" "$checksum_path" "$finished_at" "$duration_seconds" "$message" "$offsite_artifact_path" "$offsite_checksum_path" "$offsite_status" "$offsite_message" "$alert_status" "$alert_message" <<\'PY\'\n'
             "import json, sys\n"
-            "path, job, engine, status, artifact, checksum, finished_at, duration_seconds, message = sys.argv[1:]\n"
+            "(\n"
+            "    path,\n"
+            "    job,\n"
+            "    engine,\n"
+            "    status,\n"
+            "    artifact,\n"
+            "    checksum,\n"
+            "    finished_at,\n"
+            "    duration_seconds,\n"
+            "    message,\n"
+            "    offsite_artifact,\n"
+            "    offsite_checksum,\n"
+            "    offsite_status,\n"
+            "    offsite_message,\n"
+            "    alert_status,\n"
+            "    alert_message,\n"
+            ") = sys.argv[1:]\n"
             "payload = {\n"
             '    "job_name": job,\n'
             '    "engine": engine,\n'
@@ -623,11 +658,141 @@ class SystemActions:
             '    "finished_at": finished_at,\n'
             '    "duration_seconds": int(duration_seconds or "0"),\n'
             '    "message": message,\n'
+            '    "offsite_artifact_path": offsite_artifact,\n'
+            '    "offsite_checksum_path": offsite_checksum,\n'
+            '    "offsite_status": offsite_status,\n'
+            '    "offsite_message": offsite_message,\n'
+            '    "alert_status": alert_status,\n'
+            '    "alert_message": alert_message,\n'
             "}\n"
             "with open(path, 'w', encoding='utf-8') as f:\n"
             "    json.dump(payload, f, ensure_ascii=False, indent=2)\n"
             "    f.write('\\n')\n"
             "PY\n"
+            "}\n"
+            "\n"
+            "send_alert() {\n"
+            '  if [ -z "$ALERT_WEBHOOK_URL" ]; then\n'
+            '    alert_status="disabled"\n'
+            '    alert_message="alert webhook not configured"\n'
+            "    return 0\n"
+            "  fi\n"
+            '  if [ "$status" = "success" ] && [ "$ALERT_ON_SUCCESS" != "1" ]; then\n'
+            '    alert_status="skipped"\n'
+            '    alert_message="success alerts disabled"\n'
+            "    return 0\n"
+            "  fi\n"
+            '  if [ "$status" != "success" ] && [ "$ALERT_ON_FAILURE" != "1" ]; then\n'
+            '    alert_status="skipped"\n'
+            '    alert_message="failure alerts disabled"\n'
+            "    return 0\n"
+            "  fi\n"
+            '  if ! command -v curl >/dev/null 2>&1; then\n'
+            '    alert_status="failed"\n'
+            '    alert_message="curl not found"\n'
+            "    return 0\n"
+            "  fi\n"
+            '  local payload_root="${tmp_dir:-/tmp}"\n'
+            '  mkdir -p "$payload_root"\n'
+            '  local payload_file="$payload_root/alert-payload.json"\n'
+            '  python3 - "$payload_file" "$JOB_NAME" "$ENGINE" "$status" "$artifact_path" "$checksum_path" "$finished_at" "$duration_seconds" "$message" "$offsite_status" "$offsite_artifact_path" <<\'PY\'\n'
+            "import json, sys\n"
+            "path, job, engine, status, artifact, checksum, finished_at, duration_seconds, message, offsite_status, offsite_artifact = sys.argv[1:]\n"
+            "payload = {\n"
+            '    "job_name": job,\n'
+            '    "engine": engine,\n'
+            '    "status": status,\n'
+            '    "artifact_path": artifact,\n'
+            '    "checksum_path": checksum,\n'
+            '    "finished_at": finished_at,\n'
+            '    "duration_seconds": int(duration_seconds or "0"),\n'
+            '    "message": message,\n'
+            '    "offsite_status": offsite_status,\n'
+            '    "offsite_artifact_path": offsite_artifact,\n'
+            "}\n"
+            "with open(path, 'w', encoding='utf-8') as f:\n"
+            "    json.dump(payload, f, ensure_ascii=False)\n"
+            "PY\n"
+            '  if curl --silent --show-error --fail --max-time "$ALERT_TIMEOUT_SEC" -X POST -H "Content-Type: application/json" --data-binary "@$payload_file" "$ALERT_WEBHOOK_URL" >/dev/null; then\n'
+            '    alert_status="sent"\n'
+            '    alert_message="alert delivered"\n'
+            "  else\n"
+            '    alert_status="failed"\n'
+            '    alert_message="alert delivery failed"\n'
+            "  fi\n"
+            "}\n"
+            "\n"
+            "apply_retention() {\n"
+            '  local target_dir="$1"\n'
+            '  mapfile -t old_files < <(find "$target_dir" -maxdepth 1 -type f -name "${JOB_NAME}_*${OUTPUT_EXTENSION}" | sort -r)\n'
+            '  if [ "${#old_files[@]}" -gt "$RETENTION_COUNT" ]; then\n'
+            '    for old_file in "${old_files[@]:$RETENTION_COUNT}"; do\n'
+            '      rm -f "$old_file" "$old_file.sha256"\n'
+            "    done\n"
+            "  fi\n"
+            "}\n"
+            "\n"
+            "copy_offsite() {\n"
+            '  case "$OFFSITE_MODE" in\n'
+            "    ''|none)\n"
+            '      offsite_status="disabled"\n'
+            '      offsite_message="offsite copy not configured"\n'
+            "      return 0\n"
+            "      ;;\n"
+            "    local_copy)\n"
+            '      if [ -z "$OFFSITE_PATH" ]; then\n'
+            '        offsite_status="failed"\n'
+            '        offsite_message="offsite path is required for local_copy"\n'
+            "        return 1\n"
+            "      fi\n"
+            '      mkdir -p "$OFFSITE_PATH"\n'
+            '      cp "$artifact_path" "$OFFSITE_PATH/"\n'
+            '      cp "$checksum_path" "$OFFSITE_PATH/"\n'
+            '      offsite_artifact_path="$OFFSITE_PATH/$(basename "$artifact_path")"\n'
+            '      offsite_checksum_path="$OFFSITE_PATH/$(basename "$checksum_path")"\n'
+            '      (cd "$OFFSITE_PATH" && sha256sum -c "$(basename "$offsite_checksum_path")" >/dev/null)\n'
+            '      apply_retention "$OFFSITE_PATH"\n'
+            '      offsite_status="success"\n'
+            '      offsite_message="secondary copy completed"\n'
+            "      ;;\n"
+            "    scp)\n"
+            '      if [ -z "$OFFSITE_PATH" ] || [ -z "$OFFSITE_HOST" ] || [ -z "$OFFSITE_USER" ]; then\n'
+            '        offsite_status="failed"\n'
+            '        offsite_message="scp destination is incomplete"\n'
+            "        return 1\n"
+            "      fi\n"
+            '      ssh_opts=(-p "$OFFSITE_PORT" -o BatchMode=yes -o "ConnectTimeout=$OFFSITE_TIMEOUT_SEC")\n'
+            '      scp_opts=(-P "$OFFSITE_PORT" -o BatchMode=yes -o "ConnectTimeout=$OFFSITE_TIMEOUT_SEC")\n'
+            '      if [ -n "$OFFSITE_SSH_KEY" ]; then\n'
+            '        ssh_opts+=(-i "$OFFSITE_SSH_KEY")\n'
+            '        scp_opts+=(-i "$OFFSITE_SSH_KEY")\n'
+            "      fi\n"
+            '      if [ -n "$OFFSITE_KNOWN_HOSTS" ]; then\n'
+            '        ssh_opts+=(-o "UserKnownHostsFile=$OFFSITE_KNOWN_HOSTS" -o StrictHostKeyChecking=yes)\n'
+            '        scp_opts+=(-o "UserKnownHostsFile=$OFFSITE_KNOWN_HOSTS" -o StrictHostKeyChecking=yes)\n'
+            "      else\n"
+            '        ssh_opts+=(-o StrictHostKeyChecking=accept-new)\n'
+            '        scp_opts+=(-o StrictHostKeyChecking=accept-new)\n'
+            "      fi\n"
+            '      remote_target="$OFFSITE_USER@$OFFSITE_HOST"\n'
+            '      remote_dir_q="$(printf %q "$OFFSITE_PATH")"\n'
+            '      remote_checksum_q="$(printf %q "$(basename "$checksum_path")")"\n'
+            '      remote_pattern="${JOB_NAME}_*${OUTPUT_EXTENSION}"\n'
+            '      ssh "${ssh_opts[@]}" "$remote_target" "mkdir -p $remote_dir_q"\n'
+            '      scp "${scp_opts[@]}" "$artifact_path" "$checksum_path" "$remote_target:$OFFSITE_PATH/"\n'
+            '      ssh "${ssh_opts[@]}" "$remote_target" "cd $remote_dir_q && sha256sum -c $remote_checksum_q >/dev/null"\n'
+            '      ssh "${ssh_opts[@]}" "$remote_target" "cd $remote_dir_q && for old_file in \\$(ls -1t $remote_pattern 2>/dev/null | tail -n +$((RETENTION_COUNT + 1))); do rm -f -- \\"\\$old_file\\" \\"\\$old_file.sha256\\"; done"\n'
+            '      offsite_artifact_path="$OFFSITE_USER@$OFFSITE_HOST:$OFFSITE_PATH/$(basename "$artifact_path")"\n'
+            '      offsite_checksum_path="$OFFSITE_USER@$OFFSITE_HOST:$OFFSITE_PATH/$(basename "$checksum_path")"\n'
+            '      offsite_status="success"\n'
+            '      offsite_message="scp copy completed"\n'
+            "      ;;\n"
+            "    *)\n"
+            '      offsite_status="failed"\n'
+            '      offsite_message="invalid offsite mode"\n'
+            "      return 1\n"
+            "      ;;\n"
+            "  esac\n"
             "}\n"
             "\n"
             "finish_failure() {\n"
@@ -638,6 +803,7 @@ class SystemActions:
             '  if [ -z "$message" ]; then\n'
             '    message="backup failed"\n'
             "  fi\n"
+            "  send_alert\n"
             "  write_status\n"
             '  [ -n "$tmp_dir" ] && rm -rf "$tmp_dir"\n'
             '  exit "$rc"\n'
@@ -708,16 +874,13 @@ class SystemActions:
             'mv "$tmp_dir/backup$OUTPUT_EXTENSION" "$artifact_path"\n'
             'sha256sum "$artifact_path" > "$artifact_path.sha256"\n'
             'checksum_path="$artifact_path.sha256"\n'
-            'mapfile -t old_files < <(find "$BACKUP_DIR" -maxdepth 1 -type f -name "${JOB_NAME}_*${OUTPUT_EXTENSION}" | sort -r)\n'
-            'if [ "${#old_files[@]}" -gt "$RETENTION_COUNT" ]; then\n'
-            '  for old_file in "${old_files[@]:$RETENTION_COUNT}"; do\n'
-            '    rm -f "$old_file" "$old_file.sha256"\n'
-            "  done\n"
-            "fi\n"
+            'apply_retention "$BACKUP_DIR"\n'
+            'copy_offsite\n'
             'duration_seconds="$(( $(date +%s) - start_epoch ))"\n'
             'finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"\n'
             'status="success"\n'
             'message="backup completed successfully"\n'
+            "send_alert\n"
             "write_status\n"
             'rm -rf "$tmp_dir"\n'
             'echo "Backup finished: $artifact_path"\n'
@@ -1368,6 +1531,18 @@ class SystemActions:
         on_calendar: str,
         verify_free_mb: int = 512,
         compression_enabled: bool = True,
+        offsite_mode: str = "none",
+        offsite_path: str = "",
+        offsite_host: str = "",
+        offsite_port: int = 22,
+        offsite_user: str = "",
+        offsite_ssh_key: str = "",
+        offsite_known_hosts: str = "",
+        offsite_timeout_sec: int = 30,
+        alert_webhook_url: str = "",
+        alert_on_success: bool = False,
+        alert_on_failure: bool = True,
+        alert_timeout_sec: int = 10,
         progress_callback=None,
     ):
         def update(percent: int, text: str):
@@ -1402,6 +1577,50 @@ class SystemActions:
                     "Espaco livre minimo deve ser de pelo menos 128 MB.",
                     "Minimum free space must be at least 128 MB.",
                 )
+            offsite_mode_value = (offsite_mode or "none").strip().lower()
+            if offsite_mode_value not in {"none", "local_copy", "scp"}:
+                return False, SystemActions._txt(
+                    "Modo offsite invalido. Use none, local_copy ou scp.",
+                    "Invalid offsite mode. Use none, local_copy or scp.",
+                )
+            if offsite_mode_value == "local_copy" and not offsite_path.startswith("/"):
+                return False, SystemActions._txt(
+                    "Destino local secundario deve ser um diretorio absoluto.",
+                    "Secondary local destination must be an absolute directory.",
+                )
+            if offsite_mode_value == "scp":
+                if not offsite_path.startswith("/"):
+                    return False, SystemActions._txt(
+                        "Destino remoto SCP deve ser um diretorio absoluto.",
+                        "SCP remote destination must be an absolute directory.",
+                    )
+                if not offsite_host.strip() or not offsite_user.strip():
+                    return False, SystemActions._txt(
+                        "Host e usuario do destino SCP nao podem ser vazios.",
+                        "SCP destination host and user cannot be empty.",
+                    )
+                if not isinstance(offsite_port, int) or not (1 <= offsite_port <= 65535):
+                    return False, SystemActions._txt("Porta SCP invalida.", "Invalid SCP port.")
+            if offsite_ssh_key and not offsite_ssh_key.startswith("/"):
+                return False, SystemActions._txt(
+                    "Caminho da chave SSH do offsite deve ser absoluto.",
+                    "Offsite SSH key path must be absolute.",
+                )
+            if offsite_known_hosts and not offsite_known_hosts.startswith("/"):
+                return False, SystemActions._txt(
+                    "Caminho do known_hosts do offsite deve ser absoluto.",
+                    "Offsite known_hosts path must be absolute.",
+                )
+            if offsite_timeout_sec < 5:
+                return False, SystemActions._txt(
+                    "Timeout do offsite deve ser de pelo menos 5 segundos.",
+                    "Offsite timeout must be at least 5 seconds.",
+                )
+            if alert_timeout_sec < 3:
+                return False, SystemActions._txt(
+                    "Timeout do alerta deve ser de pelo menos 3 segundos.",
+                    "Alert timeout must be at least 3 seconds.",
+                )
             if not on_calendar.strip():
                 return False, SystemActions._txt("Agenda OnCalendar nao pode ser vazia.", "OnCalendar schedule cannot be empty.")
 
@@ -1428,6 +1647,18 @@ class SystemActions:
                 "DB_USER": db_user.strip(),
                 "DB_PASSWORD": db_password,
                 "AUTH_DB": auth_db.strip(),
+                "OFFSITE_MODE": offsite_mode_value,
+                "OFFSITE_PATH": offsite_path.strip(),
+                "OFFSITE_HOST": offsite_host.strip(),
+                "OFFSITE_PORT": str(offsite_port),
+                "OFFSITE_USER": offsite_user.strip(),
+                "OFFSITE_SSH_KEY": offsite_ssh_key.strip(),
+                "OFFSITE_KNOWN_HOSTS": offsite_known_hosts.strip(),
+                "OFFSITE_TIMEOUT_SEC": str(offsite_timeout_sec),
+                "ALERT_WEBHOOK_URL": alert_webhook_url.strip(),
+                "ALERT_ON_SUCCESS": "1" if alert_on_success else "0",
+                "ALERT_ON_FAILURE": "1" if alert_on_failure else "0",
+                "ALERT_TIMEOUT_SEC": str(alert_timeout_sec),
             }
             ok, msg = SystemActions.write_environment_file(paths["env_file"], env_vars)
             if not ok:
@@ -1454,6 +1685,18 @@ class SystemActions:
                 "on_calendar": on_calendar.strip(),
                 "verify_free_mb": verify_free_mb,
                 "compression_enabled": compression_enabled,
+                "offsite_mode": offsite_mode_value,
+                "offsite_path": offsite_path.strip(),
+                "offsite_host": offsite_host.strip(),
+                "offsite_port": offsite_port,
+                "offsite_user": offsite_user.strip(),
+                "offsite_ssh_key": offsite_ssh_key.strip(),
+                "offsite_known_hosts": offsite_known_hosts.strip(),
+                "offsite_timeout_sec": offsite_timeout_sec,
+                "alert_webhook_url": alert_webhook_url.strip(),
+                "alert_on_success": alert_on_success,
+                "alert_on_failure": alert_on_failure,
+                "alert_timeout_sec": alert_timeout_sec,
                 "service_name": paths["service_name"],
                 "timer_name": paths["timer_name"],
                 "script_file": paths["script_file"],
