@@ -33,6 +33,8 @@ Suite de gerenciamento de VPS em Python para automacao de servicos, usuarios e f
 - Ferramentas do sistema:
   - Atualizacao do sistema
   - Criacao de swap
+  - Instalacao de PostgreSQL local com criacao de banco/usuario
+  - Preparo de backend Spring Boot na EC2 (Java 17, `/opt/celiora`, clone opcional e comandos de subida)
   - Teste de velocidade
   - Criacao de comando global (ex: `menu`)
   - Desinstalacao completa
