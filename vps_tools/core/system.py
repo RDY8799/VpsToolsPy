@@ -1920,6 +1920,46 @@ class SystemActions:
                     "Could not identify the system codename to configure the Docker repository.",
                 )
 
+            update(3, SystemActions._txt("Preparando o Docker com seguranca", "Preparing Docker safely"))
+            docker_is_installed = False
+            docker_state = subprocess.run(
+                ["systemctl", "is-active", "docker"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            docker_socket_state = subprocess.run(
+                ["systemctl", "is-active", "docker.socket"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if docker_state.returncode == 0 or docker_socket_state.returncode == 0:
+                docker_is_installed = True
+            else:
+                docker_show = subprocess.run(
+                    ["systemctl", "show", "docker", "--property=LoadState", "--value"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                docker_socket_show = subprocess.run(
+                    ["systemctl", "show", "docker.socket", "--property=LoadState", "--value"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if (docker_show.stdout or "").strip() == "loaded" or (docker_socket_show.stdout or "").strip() == "loaded":
+                    docker_is_installed = True
+
+            if docker_is_installed:
+                for cmd in (
+                    ["systemctl", "stop", "docker"],
+                    ["systemctl", "stop", "docker.socket"],
+                ):
+                    subprocess.run(cmd, capture_output=True, text=True, check=False)
+                subprocess.run(["iptables", "-P", "FORWARD", "ACCEPT"], capture_output=True, text=True, check=False)
+
             update(5, SystemActions._txt("Instalando dependencias do Docker", "Installing Docker dependencies"))
             result = subprocess.run(["apt-get", "update", "-y"], capture_output=True, text=True, check=False)
             if result.returncode != 0:
