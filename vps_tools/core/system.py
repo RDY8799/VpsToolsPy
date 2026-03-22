@@ -387,6 +387,16 @@ class SystemActions:
         return services
 
     @staticmethod
+    def _web_db_panel_disable_restart_policy(compose_file: str):
+        compose_result = SystemActions._docker_compose_run(compose_file, ["ps", "-aq"], capture_output=True, text=True)
+        if compose_result is None or compose_result.returncode != 0:
+            return
+        container_ids = [line.strip() for line in (compose_result.stdout or "").splitlines() if line.strip()]
+        if not container_ids:
+            return
+        subprocess.run(["docker", "update", "--restart=no", *container_ids], capture_output=True, text=True, check=False)
+
+    @staticmethod
     def _web_db_panel_compose_content(
         panel_port: int,
         app_dir: str,
@@ -402,7 +412,6 @@ class SystemActions:
             services.append(
                 "  adminer:\n"
                 "    image: adminer:standalone\n"
-                "    restart: unless-stopped\n"
                 "    extra_hosts:\n"
                 "      - \"host.docker.internal:host-gateway\"\n"
             )
@@ -411,7 +420,6 @@ class SystemActions:
             services.append(
                 "  pgadmin:\n"
                 "    image: dpage/pgadmin4:latest\n"
-                "    restart: unless-stopped\n"
                 "    environment:\n"
                 f"      PGADMIN_DEFAULT_EMAIL: {json.dumps(pgadmin_email)}\n"
                 f"      PGADMIN_DEFAULT_PASSWORD: {json.dumps(pgadmin_password)}\n"
@@ -427,7 +435,6 @@ class SystemActions:
             services.append(
                 "  redisinsight:\n"
                 "    image: redis/redisinsight:latest\n"
-                "    restart: unless-stopped\n"
                 "    environment:\n"
                 "      RI_PROXY_PATH: /redis\n"
                 "    volumes:\n"
@@ -439,7 +446,6 @@ class SystemActions:
         nginx_service = (
             "  dbpanel:\n"
             "    image: nginx:alpine\n"
-            "    restart: unless-stopped\n"
             "    ports:\n"
             f"      - \"127.0.0.1:{panel_port}:80\"\n"
             "    volumes:\n"
@@ -2211,8 +2217,19 @@ class SystemActions:
                     return True, output
                 result = SystemActions._docker_compose_run(compose_file, ["ps"], capture_output=True, text=True)
             elif action == "start":
+                stale_result = SystemActions._docker_compose_run(compose_file, ["down", "--remove-orphans"], capture_output=True, text=True)
+                if stale_result is None:
+                    return False, SystemActions._txt(
+                        "Docker Compose nao encontrado.",
+                        "Docker Compose not found.",
+                    )
                 for service in SystemActions._web_db_panel_service_order(compose_file):
-                    result = SystemActions._docker_compose_run(compose_file, ["up", "-d", service], capture_output=True, text=True)
+                    result = SystemActions._docker_compose_run(
+                        compose_file,
+                        ["up", "-d", "--force-recreate", "--no-deps", service],
+                        capture_output=True,
+                        text=True,
+                    )
                     if result is None:
                         return False, SystemActions._txt(
                             "Docker Compose nao encontrado.",
@@ -2225,8 +2242,10 @@ class SystemActions:
                         )
                 result = SystemActions._docker_compose_run(compose_file, ["ps"], capture_output=True, text=True)
             elif action == "stop":
+                SystemActions._web_db_panel_disable_restart_policy(compose_file)
                 result = SystemActions._docker_compose_run(compose_file, ["stop"], capture_output=True, text=True)
             elif action == "restart":
+                SystemActions._web_db_panel_disable_restart_policy(compose_file)
                 stop_result = SystemActions._docker_compose_run(compose_file, ["stop"], capture_output=True, text=True)
                 if stop_result is None:
                     return False, SystemActions._txt(
@@ -2238,8 +2257,19 @@ class SystemActions:
                         "Falha ao parar o painel antes do restart.",
                         "Failed to stop the panel before restart.",
                     )
+                stale_result = SystemActions._docker_compose_run(compose_file, ["down", "--remove-orphans"], capture_output=True, text=True)
+                if stale_result is None:
+                    return False, SystemActions._txt(
+                        "Docker Compose nao encontrado.",
+                        "Docker Compose not found.",
+                    )
                 for service in SystemActions._web_db_panel_service_order(compose_file):
-                    result = SystemActions._docker_compose_run(compose_file, ["up", "-d", service], capture_output=True, text=True)
+                    result = SystemActions._docker_compose_run(
+                        compose_file,
+                        ["up", "-d", "--force-recreate", "--no-deps", service],
+                        capture_output=True,
+                        text=True,
+                    )
                     if result is None:
                         return False, SystemActions._txt(
                             "Docker Compose nao encontrado.",
@@ -2252,6 +2282,7 @@ class SystemActions:
                         )
                 result = SystemActions._docker_compose_run(compose_file, ["ps"], capture_output=True, text=True)
             else:
+                SystemActions._web_db_panel_disable_restart_policy(compose_file)
                 result = SystemActions._docker_compose_run(compose_file, ["down"], capture_output=True, text=True)
                 if result is not None and result.returncode == 0 and remove_files and os.path.isdir(app_dir):
                     shutil.rmtree(app_dir, ignore_errors=True)
