@@ -2380,6 +2380,21 @@ class SystemActions:
             ok, msg = SystemActions._write_text_file(htpasswd_path, f"{auth_user}:{hashed}\n", mode=0o640)
             if not ok:
                 return False, msg
+            nginx_group = "www-data" if shutil.which("getent") else ""
+            if nginx_group:
+                getent_result = subprocess.run(
+                    ["getent", "group", nginx_group],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if getent_result.returncode == 0:
+                    subprocess.run(["chown", f"root:{nginx_group}", htpasswd_path], capture_output=True, text=True, check=False)
+                    subprocess.run(["chmod", "640", htpasswd_path], capture_output=True, text=True, check=False)
+                else:
+                    subprocess.run(["chmod", "644", htpasswd_path], capture_output=True, text=True, check=False)
+            else:
+                subprocess.run(["chmod", "644", htpasswd_path], capture_output=True, text=True, check=False)
 
             conf_content = (
                 "server {\n"
