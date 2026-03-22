@@ -187,6 +187,8 @@ class VPSToolsApp:
                 "instalacao do banco mariadb": "MariaDB database setup",
                 "instalacao do banco mongodb": "MongoDB database setup",
                 "instalacao do banco redis": "Redis cache/session/queue setup",
+                "instalacao do painel web de bancos": "web database panel installation",
+                "gerenciamento do painel web de bancos": "web database panel management",
                 "configuracao de reverse proxy nginx": "Nginx reverse proxy setup",
                 "configuracao de https com certbot": "HTTPS with Certbot setup",
                 "criacao de servico systemd generico": "generic systemd service creation",
@@ -337,6 +339,7 @@ class VPSToolsApp:
             "MariaDB": ["mariadb"],
             "MongoDB": ["mongod"],
             "Redis": ["redis-server", "redis"],
+            "Docker": ["docker"],
             "Nginx": ["nginx"],
             "Certbot": ["certbot.timer", "snap.certbot.renew.timer"],
         }
@@ -360,6 +363,14 @@ class VPSToolsApp:
             active = bool(active_name)
             note = active_name if active_name else self._txt("nao detectado", "not detected")
             table.add_row(label, self._status_badge(active), note)
+
+        web_panel = self.sys_actions.web_db_panel_status()
+        web_note = (
+            self._txt(f"porta {web_panel['panel_port']}", f"port {web_panel['panel_port']}")
+            if web_panel.get("installed") and web_panel.get("panel_port")
+            else self._txt("nao detectado", "not detected")
+        )
+        table.add_row("DB Web Panel", self._status_badge(bool(web_panel.get("running"))), web_note)
 
         self.ui.console.print(
             Panel(
@@ -734,6 +745,119 @@ class VPSToolsApp:
             self.ui.print_error(data)
         self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
 
+    def _web_db_panel_setup_flow(self):
+        if not self._confirm("instalacao do painel web de bancos"):
+            return
+
+        self.ui.console.print(
+            Panel(
+                self._txt(
+                    "Este modulo instala um painel web opcional para administracao de bancos, usando ferramentas oficiais em containers.\n"
+                    "O painel fica local em 127.0.0.1 por padrao e nao abre portas automaticamente para a internet.",
+                    "This module installs an optional web panel for database administration using official tools in containers.\n"
+                    "The panel stays local on 127.0.0.1 by default and does not automatically open ports to the internet.",
+                ),
+                title=self._txt("PAINEL WEB DE BANCOS", "WEB DATABASE PANEL"),
+                border_style="yellow",
+            )
+        )
+
+        app_dir = self._prompt_default("Diretorio do painel", "Panel directory", "/opt/vps-tools-db-panel")
+        panel_port = self._prompt_int_default("Porta local do painel web", "Local web panel port", 18090)
+        enable_adminer = self._prompt_bool_default("Ativar Adminer", "Enable Adminer", True)
+        enable_pgadmin = self._prompt_bool_default("Ativar pgAdmin 4", "Enable pgAdmin 4", True)
+        enable_redisinsight = self._prompt_bool_default("Ativar Redis Insight", "Enable Redis Insight", True)
+        pgadmin_email = self._prompt_default("E-mail inicial do pgAdmin", "Initial pgAdmin email", "admin@localhost") if enable_pgadmin else ""
+        pgadmin_password = self._prompt_default("Senha inicial do pgAdmin (vazio = gerar)", "Initial pgAdmin password (empty = generate)", "") if enable_pgadmin else ""
+
+        def worker(update):
+            return self.sys_actions.install_web_db_panel(
+                app_dir=app_dir,
+                panel_port=panel_port,
+                enable_adminer=enable_adminer,
+                enable_pgadmin=enable_pgadmin,
+                enable_redisinsight=enable_redisinsight,
+                pgadmin_email=pgadmin_email,
+                pgadmin_password=pgadmin_password,
+                progress_callback=update,
+            )
+
+        ok, data = self.ui.run_animated_task(self._txt("Instalando painel web de bancos", "Installing web database panel"), worker)
+        if ok:
+            notes = "\n".join(f"- {item}" for item in data["notes"])
+            tools = ", ".join(data["enabled_tools"]) or "-"
+            summary = (
+                f"[white]{self._txt('Diretorio', 'Directory')}:[/white] [cyan]{data['app_dir']}[/cyan]\n"
+                f"[white]{self._txt('URL local', 'Local URL')}:[/white] [cyan]{data['local_url']}[/cyan]\n"
+                f"[white]{self._txt('URL remota', 'Remote URL')}:[/white] [cyan]{data['remote_url']}[/cyan]\n"
+                f"[white]{self._txt('Ferramentas', 'Tools')}:[/white] [cyan]{tools}[/cyan]\n"
+            )
+            if data.get("pgadmin_email"):
+                summary += (
+                    f"[white]pgAdmin email:[/white] [cyan]{data['pgadmin_email']}[/cyan]\n"
+                    f"[white]pgAdmin password:[/white] [cyan]{data['pgadmin_password']}[/cyan]\n"
+                )
+            summary += (
+                f"\n[white]{self._txt('Observacoes', 'Notes')}:[/white]\n{notes}\n\n"
+                f"[white]docker compose ps[/white]\n{data['compose_status'][-2500:]}"
+            )
+            self.ui.console.print(
+                Panel(
+                    summary,
+                    title=self._txt("PAINEL WEB INSTALADO", "WEB PANEL INSTALLED"),
+                    border_style="green",
+                )
+            )
+        else:
+            self.ui.print_error(data)
+        self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+
+    def _web_db_panel_manage_flow(self):
+        if not self._confirm("gerenciamento do painel web de bancos"):
+            return
+
+        app_dir = self._prompt_default("Diretorio do painel", "Panel directory", "/opt/vps-tools-db-panel")
+        self.ui.console.print(f"[yellow]1)[/yellow] {self._txt('Iniciar/atualizar painel', 'Start/update panel')}")
+        self.ui.console.print(f"[yellow]2)[/yellow] {self._txt('Parar painel', 'Stop panel')}")
+        self.ui.console.print(f"[yellow]3)[/yellow] {self._txt('Reiniciar painel', 'Restart panel')}")
+        self.ui.console.print(f"[yellow]4)[/yellow] {self._txt('Status do painel', 'Panel status')}")
+        self.ui.console.print(f"[yellow]5)[/yellow] {self._txt('Desinstalar painel', 'Uninstall panel')}")
+        option = self._normalize_option(self.ui.prompt(self._txt("Opcao: ", "Option: ")))
+
+        action_map = {
+            "1": "start",
+            "2": "stop",
+            "3": "restart",
+            "4": "status",
+            "5": "uninstall",
+        }
+        action = action_map.get(option)
+        if not action:
+            self.ui.print_error(self.lang.t("menu.invalid", "Opcao invalida!"))
+            time.sleep(1)
+            return
+
+        remove_files = False
+        if action == "uninstall":
+            remove_files = self._prompt_bool_default(
+                "Remover tambem os arquivos do painel",
+                "Also remove the panel files",
+                False,
+            )
+
+        ok, data = self.sys_actions.manage_web_db_panel(app_dir=app_dir, action=action, remove_files=remove_files)
+        if ok:
+            self.ui.console.print(
+                Panel(
+                    data[-4000:] if isinstance(data, str) else str(data),
+                    title=self._txt("STATUS DO PAINEL WEB", "WEB PANEL STATUS"),
+                    border_style="blue",
+                )
+            )
+        else:
+            self.ui.print_error(data)
+        self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+
     def _https_certbot_flow(self):
         if not self._confirm("configuracao de https com certbot"):
             return
@@ -836,6 +960,8 @@ class VPSToolsApp:
                 "08": self._txt("GERENCIAR SERVICO SYSTEMD", "MANAGE SYSTEMD SERVICE"),
                 "09": self._txt("CONFIGURAR NGINX REVERSE PROXY", "CONFIGURE NGINX REVERSE PROXY"),
                 "10": self._txt("CONFIGURAR HTTPS COM CERTBOT", "CONFIGURE HTTPS WITH CERTBOT"),
+                "11": self._txt("INSTALAR PAINEL WEB DE BANCOS", "INSTALL WEB DATABASE PANEL"),
+                "12": self._txt("GERENCIAR PAINEL WEB DE BANCOS", "MANAGE WEB DATABASE PANEL"),
                 "00": self.lang.t("menu.back", "VOLTAR"),
             }
             self.ui.draw_menu(options, self._txt("BANCO DE DADOS / BACKEND", "DATABASE / BACKEND"))
@@ -861,6 +987,10 @@ class VPSToolsApp:
                 self._nginx_proxy_setup_flow()
             elif option == "10":
                 self._https_certbot_flow()
+            elif option == "11":
+                self._web_db_panel_setup_flow()
+            elif option == "12":
+                self._web_db_panel_manage_flow()
             elif option == "00":
                 break
             else:

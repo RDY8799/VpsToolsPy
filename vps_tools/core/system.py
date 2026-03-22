@@ -1,9 +1,11 @@
 import json
 import os
 import re
+import secrets
 import shlex
 import shutil
 import socket
+import string
 import subprocess
 import time
 
@@ -318,6 +320,385 @@ class SystemActions:
             safe_key = re.sub(r"[^A-Za-z0-9_]", "_", key or "").upper()
             lines.append(f"{safe_key}={shlex.quote(str(value))}")
         return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def _random_secret(length: int = 24) -> str:
+        chars = string.ascii_letters + string.digits
+        return "".join(secrets.choice(chars) for _ in range(length))
+
+    @staticmethod
+    def _docker_compose_command() -> list[str]:
+        docker = shutil.which("docker")
+        if docker:
+            probe = subprocess.run([docker, "compose", "version"], capture_output=True, text=True, check=False)
+            if probe.returncode == 0:
+                return [docker, "compose"]
+        legacy = shutil.which("docker-compose")
+        if legacy:
+            return [legacy]
+        return []
+
+    @staticmethod
+    def _docker_compose_run(compose_file: str, args: list[str], capture_output: bool = True, text: bool = True):
+        cmd = SystemActions._docker_compose_command()
+        if not cmd:
+            return None
+        return subprocess.run([*cmd, "-f", compose_file, *args], capture_output=capture_output, text=text, check=False)
+
+    @staticmethod
+    def _web_db_panel_compose_content(
+        panel_port: int,
+        app_dir: str,
+        enable_adminer: bool,
+        enable_pgadmin: bool,
+        enable_redisinsight: bool,
+        pgadmin_email: str,
+        pgadmin_password: str,
+    ) -> str:
+        services = []
+
+        if enable_adminer:
+            services.append(
+                "  adminer:\n"
+                "    image: adminer:standalone\n"
+                "    restart: unless-stopped\n"
+                "    extra_hosts:\n"
+                "      - \"host.docker.internal:host-gateway\"\n"
+            )
+
+        if enable_pgadmin:
+            services.append(
+                "  pgadmin:\n"
+                "    image: dpage/pgadmin4:latest\n"
+                "    restart: unless-stopped\n"
+                "    environment:\n"
+                f"      PGADMIN_DEFAULT_EMAIL: {json.dumps(pgadmin_email)}\n"
+                f"      PGADMIN_DEFAULT_PASSWORD: {json.dumps(pgadmin_password)}\n"
+                "      PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION: 'True'\n"
+                "      PGADMIN_CONFIG_CONSOLE_LOG_LEVEL: '20'\n"
+                "    volumes:\n"
+                "      - ./pgadmin:/var/lib/pgadmin\n"
+                "    extra_hosts:\n"
+                "      - \"host.docker.internal:host-gateway\"\n"
+            )
+
+        if enable_redisinsight:
+            services.append(
+                "  redisinsight:\n"
+                "    image: redis/redisinsight:latest\n"
+                "    restart: unless-stopped\n"
+                "    environment:\n"
+                "      RI_PROXY_PATH: /redis\n"
+                "    volumes:\n"
+                "      - ./redisinsight:/data\n"
+                "    extra_hosts:\n"
+                "      - \"host.docker.internal:host-gateway\"\n"
+            )
+
+        depends_on = []
+        if enable_adminer:
+            depends_on.append("adminer")
+        if enable_pgadmin:
+            depends_on.append("pgadmin")
+        if enable_redisinsight:
+            depends_on.append("redisinsight")
+
+        depends_block = ""
+        if depends_on:
+            depends_lines = "\n".join(f"      - {name}" for name in depends_on)
+            depends_block = f"    depends_on:\n{depends_lines}\n"
+
+        nginx_service = (
+            "  dbpanel:\n"
+            "    image: nginx:alpine\n"
+            "    restart: unless-stopped\n"
+            "    ports:\n"
+            f"      - \"127.0.0.1:{panel_port}:80\"\n"
+            f"{depends_block}"
+            "    volumes:\n"
+            "      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro\n"
+            "      - ./dashboard:/usr/share/nginx/html:ro\n"
+        )
+
+        body = "\n".join([nginx_service, *services]).rstrip() + "\n"
+        return (
+            'name: "vps-tools-db-panel"\n'
+            "services:\n"
+            f"{body}"
+        )
+
+    @staticmethod
+    def _web_db_panel_nginx_conf(enable_adminer: bool, enable_pgadmin: bool, enable_redisinsight: bool) -> str:
+        sections = [
+            "server {",
+            "    listen 80;",
+            "    server_name _;",
+            "",
+            "    root /usr/share/nginx/html;",
+            "    index index.html;",
+            "",
+            "    location = / {",
+            "        try_files /index.html =404;",
+            "    }",
+            "",
+        ]
+
+        if enable_adminer:
+            sections.extend(
+                [
+                    "    location /adminer/ {",
+                    "        proxy_set_header Host $host;",
+                    "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+                    "        proxy_set_header X-Forwarded-Proto $scheme;",
+                    "        proxy_pass http://adminer:8080/;",
+                    "        proxy_redirect off;",
+                    "    }",
+                    "",
+                ]
+            )
+
+        if enable_pgadmin:
+            sections.extend(
+                [
+                    "    location /pgadmin4/ {",
+                    "        proxy_set_header X-Script-Name /pgadmin4;",
+                    "        proxy_set_header X-Scheme $scheme;",
+                    "        proxy_set_header Host $host;",
+                    "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+                    "        proxy_set_header X-Forwarded-Proto $scheme;",
+                    "        proxy_pass http://pgadmin:80/;",
+                    "        proxy_redirect off;",
+                    "    }",
+                    "",
+                ]
+            )
+
+        if enable_redisinsight:
+            sections.extend(
+                [
+                    "    location /redis/ {",
+                    "        proxy_set_header Host $host;",
+                    "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+                    "        proxy_set_header X-Forwarded-Proto $scheme;",
+                    "        proxy_pass http://redisinsight:5540;",
+                    "        proxy_redirect off;",
+                    "    }",
+                    "",
+                ]
+            )
+
+        sections.append("}")
+        return "\n".join(sections) + "\n"
+
+    @staticmethod
+    def _web_db_panel_dashboard_html(
+        panel_port: int,
+        enable_adminer: bool,
+        enable_pgadmin: bool,
+        enable_redisinsight: bool,
+        pgadmin_email: str,
+        pgadmin_password: str,
+    ) -> str:
+        cards = []
+        if enable_adminer:
+            cards.append(
+                """
+        <a class="card" href="/adminer/">
+          <strong>Adminer</strong>
+          <span>MySQL, MariaDB e PostgreSQL</span>
+          <small>Use o host <code>host.docker.internal</code></small>
+        </a>""".rstrip()
+            )
+        if enable_pgadmin:
+            cards.append(
+                f"""
+        <a class="card" href="/pgadmin4/">
+          <strong>pgAdmin 4</strong>
+          <span>Painel PostgreSQL</span>
+          <small>Login inicial: <code>{pgadmin_email}</code> / <code>{pgadmin_password}</code></small>
+        </a>""".rstrip()
+            )
+        if enable_redisinsight:
+            cards.append(
+                """
+        <a class="card" href="/redis/">
+          <strong>Redis Insight</strong>
+          <span>Painel Redis</span>
+          <small>Adicione a conexao usando <code>host.docker.internal</code></small>
+        </a>""".rstrip()
+            )
+
+        cards_html = "\n".join(cards)
+        return f"""<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Painel Web de Bancos</title>
+  <style>
+    :root {{
+      --bg: #f5f1e8;
+      --ink: #1b1d1f;
+      --muted: #5d635f;
+      --line: #d8cfbf;
+      --card: #fffaf1;
+      --accent: #0f766e;
+      --accent-2: #d97706;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      background:
+        radial-gradient(circle at top left, rgba(217,119,6,.12), transparent 28%),
+        radial-gradient(circle at bottom right, rgba(15,118,110,.14), transparent 32%),
+        var(--bg);
+      color: var(--ink);
+    }}
+    .wrap {{
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 48px 24px 64px;
+    }}
+    .hero {{
+      border: 1px solid var(--line);
+      background: rgba(255,250,241,.88);
+      backdrop-filter: blur(8px);
+      padding: 28px;
+      border-radius: 24px;
+      box-shadow: 0 24px 80px rgba(27,29,31,.08);
+    }}
+    h1 {{
+      margin: 0 0 10px;
+      font-size: clamp(2rem, 4vw, 3.5rem);
+      line-height: 1;
+    }}
+    p {{
+      margin: 0;
+      color: var(--muted);
+      max-width: 800px;
+      font-size: 1.02rem;
+    }}
+    .meta {{
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 18px;
+    }}
+    .pill {{
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 8px 14px;
+      font-size: .92rem;
+      background: white;
+    }}
+    .grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 18px;
+      margin-top: 26px;
+    }}
+    .card {{
+      display: block;
+      text-decoration: none;
+      color: inherit;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      padding: 22px;
+      transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+      box-shadow: 0 14px 44px rgba(27,29,31,.06);
+    }}
+    .card:hover {{
+      transform: translateY(-3px);
+      border-color: rgba(15,118,110,.45);
+      box-shadow: 0 22px 54px rgba(27,29,31,.10);
+    }}
+    .card strong {{
+      display: block;
+      font-size: 1.15rem;
+      margin-bottom: 6px;
+    }}
+    .card span {{
+      display: block;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }}
+    .card small {{
+      color: var(--accent);
+    }}
+    .notes {{
+      margin-top: 24px;
+      padding: 18px 20px;
+      border-left: 4px solid var(--accent-2);
+      background: rgba(255,255,255,.6);
+      border-radius: 16px;
+      color: var(--muted);
+    }}
+    code {{
+      font-family: Consolas, "Courier New", monospace;
+      font-size: .95em;
+    }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1>Painel Web de Bancos</h1>
+      <p>Interface central para abrir ferramentas web de administracao dos bancos instalados nesta maquina. Por seguranca, o painel fica publicado apenas em <code>127.0.0.1:{panel_port}</code> ate voce decidir expor via firewall ou Nginx.</p>
+      <div class="meta">
+        <div class="pill">URL local: <code>http://127.0.0.1:{panel_port}/</code></div>
+        <div class="pill">Host para conexoes internas: <code>host.docker.internal</code></div>
+      </div>
+      <div class="grid">
+{cards_html}
+      </div>
+      <div class="notes">
+        Nao abra este painel para a internet inteira. Se precisar acesso remoto, prefira liberar a porta apenas para seu IP ou publicar atras de HTTPS com autenticacao.
+      </div>
+    </section>
+  </div>
+</body>
+</html>
+"""
+
+    @staticmethod
+    def web_db_panel_status(app_dir: str = "/opt/vps-tools-db-panel"):
+        compose_file = os.path.join(app_dir, "compose.yml")
+        installed = os.path.exists(compose_file)
+        docker_active = False
+        result = subprocess.run(["systemctl", "is-active", "docker"], capture_output=True, text=True, check=False)
+        if result.returncode == 0 and result.stdout.strip() == "active":
+            docker_active = True
+
+        running = False
+        ps_output = ""
+        if installed:
+            compose_result = SystemActions._docker_compose_run(compose_file, ["ps"], capture_output=True, text=True)
+            if compose_result is not None:
+                ps_output = (compose_result.stdout or compose_result.stderr or "").strip()
+                running = compose_result.returncode == 0 and "Up" in ps_output
+
+        panel_port = ""
+        try:
+            if installed:
+                with open(compose_file, "r", encoding="utf-8") as f:
+                    for line in f:
+                        match = re.search(r'127\.0\.0\.1:(\d+):80', line)
+                        if match:
+                            panel_port = match.group(1)
+                            break
+        except Exception:
+            panel_port = ""
+
+        return {
+            "installed": installed,
+            "docker_active": docker_active,
+            "running": running,
+            "compose_file": compose_file,
+            "panel_port": panel_port,
+            "ps_output": ps_output,
+        }
 
     @staticmethod
     def write_environment_file(path: str, env_vars: dict[str, str], owner_user: str = ""):
@@ -1430,6 +1811,278 @@ class SystemActions:
                 "timer_status": (timer.stdout or timer.stderr or "").strip(),
                 "certbot_output": (result.stdout or result.stderr or "").strip(),
             }
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def install_web_db_panel(
+        app_dir: str = "/opt/vps-tools-db-panel",
+        panel_port: int = 18090,
+        enable_adminer: bool = True,
+        enable_pgadmin: bool = True,
+        enable_redisinsight: bool = True,
+        pgadmin_email: str = "admin@localhost",
+        pgadmin_password: str = "",
+        progress_callback=None,
+    ):
+        def update(percent: int, text: str):
+            if progress_callback:
+                progress_callback(completed=percent, description=f"[cyan]{text}[/cyan]")
+
+        try:
+            if os.name == "nt":
+                return False, SystemActions._txt(
+                    "Painel web de bancos nao suportado no Windows.",
+                    "Web database panel is not supported on Windows.",
+                )
+            if SystemActions._package_manager() != "apt":
+                return False, SystemActions._txt(
+                    "Instalacao automatica do painel disponivel apenas para Debian/Ubuntu.",
+                    "Automatic panel installation is available only on Debian/Ubuntu.",
+                )
+            if not app_dir.startswith("/"):
+                return False, SystemActions._txt(
+                    "Diretorio do painel deve ser absoluto.",
+                    "Panel directory must be absolute.",
+                )
+            if not (1 <= panel_port <= 65535):
+                return False, SystemActions._txt("Porta invalida.", "Invalid port.")
+            if not any([enable_adminer, enable_pgadmin, enable_redisinsight]):
+                return False, SystemActions._txt(
+                    "Selecione pelo menos uma ferramenta para o painel.",
+                    "Select at least one tool for the panel.",
+                )
+            if enable_pgadmin and "@" not in pgadmin_email:
+                return False, SystemActions._txt(
+                    "E-mail do pgAdmin invalido.",
+                    "Invalid pgAdmin email.",
+                )
+            if enable_pgadmin and not pgadmin_password:
+                pgadmin_password = SystemActions._random_secret(18)
+
+            os_release = SystemActions._read_os_release()
+            distro_id = (os_release.get("ID") or "").lower()
+            if distro_id not in {"ubuntu", "debian"}:
+                return False, SystemActions._txt(
+                    f"Distribuicao nao suportada para instalacao automatica do Docker: {distro_id or 'desconhecida'}",
+                    f"Unsupported distribution for automatic Docker installation: {distro_id or 'unknown'}",
+                )
+
+            version_codename = (os_release.get("UBUNTU_CODENAME") or os_release.get("VERSION_CODENAME") or "").strip()
+            if not version_codename:
+                return False, SystemActions._txt(
+                    "Nao foi possivel identificar o codename do sistema para configurar o repositorio do Docker.",
+                    "Could not identify the system codename to configure the Docker repository.",
+                )
+
+            update(5, SystemActions._txt("Instalando dependencias do Docker", "Installing Docker dependencies"))
+            result = subprocess.run(["apt-get", "update", "-y"], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha no apt-get update.",
+                    "apt-get update failed.",
+                )
+            result = subprocess.run(
+                ["apt-get", "install", "-y", "ca-certificates", "curl"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha ao instalar dependencias do Docker.",
+                    "Failed to install Docker dependencies.",
+                )
+
+            update(20, SystemActions._txt("Configurando repositorio oficial do Docker", "Configuring the official Docker repository"))
+            os.makedirs("/etc/apt/keyrings", exist_ok=True)
+            key_path = "/etc/apt/keyrings/docker.asc"
+            gpg_url = f"https://download.docker.com/linux/{distro_id}/gpg"
+            result = subprocess.run(["curl", "-fsSL", gpg_url, "-o", key_path], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha ao baixar a chave do Docker.",
+                    "Failed to download the Docker key.",
+                )
+            subprocess.run(["chmod", "a+r", key_path], capture_output=True, text=True, check=False)
+
+            arch_result = subprocess.run(["dpkg", "--print-architecture"], capture_output=True, text=True, check=False)
+            if arch_result.returncode != 0:
+                return False, arch_result.stderr.strip() or arch_result.stdout.strip() or SystemActions._txt(
+                    "Falha ao detectar a arquitetura do sistema.",
+                    "Failed to detect the system architecture.",
+                )
+            architecture = arch_result.stdout.strip()
+            repo_line = (
+                f"deb [arch={architecture} signed-by={key_path}] "
+                f"https://download.docker.com/linux/{distro_id} {version_codename} stable\n"
+            )
+            ok, msg = SystemActions._write_text_file("/etc/apt/sources.list.d/docker.list", repo_line)
+            if not ok:
+                return False, msg
+
+            update(35, SystemActions._txt("Instalando Docker Engine e Compose", "Installing Docker Engine and Compose"))
+            result = subprocess.run(["apt-get", "update", "-y"], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha ao atualizar o repositorio do Docker.",
+                    "Failed to refresh the Docker repository.",
+                )
+            result = subprocess.run(
+                [
+                    "apt-get", "install", "-y",
+                    "docker-ce", "docker-ce-cli", "containerd.io",
+                    "docker-buildx-plugin", "docker-compose-plugin",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha na instalacao do Docker Engine.",
+                    "Docker Engine installation failed.",
+                )
+
+            update(50, SystemActions._txt("Habilitando e iniciando o Docker", "Enabling and starting Docker"))
+            for cmd in (["systemctl", "enable", "docker"], ["systemctl", "restart", "docker"]):
+                result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                if result.returncode != 0:
+                    return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                        f"Falha ao executar: {' '.join(cmd)}",
+                        f"Failed to execute: {' '.join(cmd)}",
+                    )
+
+            compose_file = os.path.join(app_dir, "compose.yml")
+            nginx_dir = os.path.join(app_dir, "nginx")
+            dashboard_dir = os.path.join(app_dir, "dashboard")
+            pgadmin_dir = os.path.join(app_dir, "pgadmin")
+            redis_dir = os.path.join(app_dir, "redisinsight")
+            os.makedirs(nginx_dir, exist_ok=True)
+            os.makedirs(dashboard_dir, exist_ok=True)
+            if enable_pgadmin:
+                os.makedirs(pgadmin_dir, exist_ok=True)
+                subprocess.run(["chown", "-R", "5050:5050", pgadmin_dir], capture_output=True, text=True, check=False)
+            if enable_redisinsight:
+                os.makedirs(redis_dir, exist_ok=True)
+
+            update(70, SystemActions._txt("Gravando arquivos do painel web", "Writing web panel files"))
+            compose_content = SystemActions._web_db_panel_compose_content(
+                panel_port=panel_port,
+                app_dir=app_dir,
+                enable_adminer=enable_adminer,
+                enable_pgadmin=enable_pgadmin,
+                enable_redisinsight=enable_redisinsight,
+                pgadmin_email=pgadmin_email,
+                pgadmin_password=pgadmin_password,
+            )
+            ok, msg = SystemActions._write_text_file(compose_file, compose_content)
+            if not ok:
+                return False, msg
+
+            ok, msg = SystemActions._write_text_file(
+                os.path.join(nginx_dir, "default.conf"),
+                SystemActions._web_db_panel_nginx_conf(enable_adminer, enable_pgadmin, enable_redisinsight),
+            )
+            if not ok:
+                return False, msg
+
+            ok, msg = SystemActions._write_text_file(
+                os.path.join(dashboard_dir, "index.html"),
+                SystemActions._web_db_panel_dashboard_html(
+                    panel_port=panel_port,
+                    enable_adminer=enable_adminer,
+                    enable_pgadmin=enable_pgadmin,
+                    enable_redisinsight=enable_redisinsight,
+                    pgadmin_email=pgadmin_email,
+                    pgadmin_password=pgadmin_password,
+                ),
+            )
+            if not ok:
+                return False, msg
+
+            update(85, SystemActions._txt("Subindo containers do painel", "Starting panel containers"))
+            compose_result = SystemActions._docker_compose_run(compose_file, ["up", "-d"], capture_output=True, text=True)
+            if compose_result is None:
+                return False, SystemActions._txt(
+                    "Docker Compose nao encontrado apos a instalacao.",
+                    "Docker Compose was not found after installation.",
+                )
+            if compose_result.returncode != 0:
+                return False, (compose_result.stderr or compose_result.stdout or "").strip() or SystemActions._txt(
+                    "Falha ao subir os containers do painel.",
+                    "Failed to start the panel containers.",
+                )
+
+            ps_result = SystemActions._docker_compose_run(compose_file, ["ps"], capture_output=True, text=True)
+            docker_status = subprocess.run(["systemctl", "status", "docker", "--no-pager"], capture_output=True, text=True, check=False)
+            update(100, SystemActions._txt("Painel web de bancos instalado", "Web database panel installed"))
+            return True, {
+                "app_dir": app_dir,
+                "compose_file": compose_file,
+                "panel_port": panel_port,
+                "local_url": f"http://127.0.0.1:{panel_port}/",
+                "remote_url": f"http://{SystemInfo.get_ip()}:{panel_port}/",
+                "pgadmin_email": pgadmin_email if enable_pgadmin else "",
+                "pgadmin_password": pgadmin_password if enable_pgadmin else "",
+                "enabled_tools": [
+                    name
+                    for name, enabled in (
+                        ("Adminer", enable_adminer),
+                        ("pgAdmin 4", enable_pgadmin),
+                        ("Redis Insight", enable_redisinsight),
+                    )
+                    if enabled
+                ],
+                "compose_status": (ps_result.stdout or ps_result.stderr or "").strip() if ps_result else "",
+                "docker_status": (docker_status.stdout or docker_status.stderr or "").strip(),
+                "notes": [
+                    SystemActions._txt("painel publicado apenas em 127.0.0.1 por padrao", "panel published only on 127.0.0.1 by default"),
+                    SystemActions._txt("use host.docker.internal dentro dos paineis para acessar bancos da maquina", "use host.docker.internal inside the tools to access databases on the host machine"),
+                    SystemActions._txt("nao abra a porta do painel para toda a internet", "do not expose the panel port to the entire internet"),
+                ],
+            }
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def manage_web_db_panel(app_dir: str = "/opt/vps-tools-db-panel", action: str = "status", remove_files: bool = False):
+        try:
+            compose_file = os.path.join(app_dir, "compose.yml")
+            if not os.path.exists(compose_file):
+                return False, SystemActions._txt(
+                    f"Painel web nao encontrado em {app_dir}.",
+                    f"Web panel not found in {app_dir}.",
+                )
+
+            if action not in {"start", "stop", "restart", "status", "uninstall"}:
+                return False, SystemActions._txt(
+                    f"Acao invalida para o painel web: {action}",
+                    f"Invalid action for the web panel: {action}",
+                )
+
+            if action == "status":
+                result = SystemActions._docker_compose_run(compose_file, ["ps"], capture_output=True, text=True)
+            elif action == "start":
+                result = SystemActions._docker_compose_run(compose_file, ["up", "-d"], capture_output=True, text=True)
+            elif action == "stop":
+                result = SystemActions._docker_compose_run(compose_file, ["stop"], capture_output=True, text=True)
+            elif action == "restart":
+                result = SystemActions._docker_compose_run(compose_file, ["restart"], capture_output=True, text=True)
+            else:
+                result = SystemActions._docker_compose_run(compose_file, ["down"], capture_output=True, text=True)
+                if result is not None and result.returncode == 0 and remove_files and os.path.isdir(app_dir):
+                    shutil.rmtree(app_dir, ignore_errors=True)
+
+            if result is None:
+                return False, SystemActions._txt(
+                    "Docker Compose nao encontrado.",
+                    "Docker Compose not found.",
+                )
+
+            output = (result.stdout or result.stderr or "").strip()
+            ok = result.returncode == 0
+            return ok, output or SystemActions._txt("Acao concluida.", "Action completed.")
         except Exception as exc:
             return False, str(exc)
 

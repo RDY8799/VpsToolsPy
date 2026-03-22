@@ -47,6 +47,7 @@ Suite de gerenciamento de VPS em Python para automacao de servicos, usuarios e f
   - criacao e gerenciamento de servico `systemd`
   - Nginx reverse proxy configuravel
   - HTTPS com Certbot
+  - painel web opcional de bancos com Docker + Adminer + pgAdmin 4 + Redis Insight
 - Internacionalizacao:
   - strings externas em `vps_tools/i18n/strings.json`
   - menu de idioma detecta automaticamente os codigos presentes no arquivo
@@ -225,6 +226,43 @@ Boas praticas:
 - mantenha o banco local quando possivel
 - so publique `80/443` depois que o backend estiver funcionando
 
+### 6.1 Painel web de bancos
+
+Se quiser uma interface web para administrar os bancos:
+
+1. Entre em `04`
+2. Escolha `INSTALAR PAINEL WEB DE BANCOS`
+3. Selecione quais ferramentas quer ativar
+4. Informe a porta local do painel
+5. Ao final, abra a URL local mostrada na tela
+
+Esse modulo instala um painel opcional com:
+
+- `Adminer` para MySQL, MariaDB e PostgreSQL
+- `pgAdmin 4` para PostgreSQL
+- `Redis Insight` para Redis
+
+O painel usa Docker e fica preso a `127.0.0.1` por padrao, sem abrir acesso publico automaticamente.
+
+Dentro das ferramentas, para conectar nos bancos da propria maquina, use:
+
+```text
+host.docker.internal
+```
+
+Exemplos:
+
+- PostgreSQL no Adminer/pgAdmin: host `host.docker.internal`, porta `5432`
+- MySQL/MariaDB no Adminer: host `host.docker.internal`, porta `3306`
+- Redis no Redis Insight: host `host.docker.internal`, porta `6379`
+
+Recomendacoes de seguranca:
+
+- nao abra a porta do painel para toda a internet
+- se precisar acesso remoto, libere a porta apenas para o seu IP
+- se quiser publicar com dominio, coloque o painel atras de Nginx + HTTPS
+- o painel nao substitui o banco principal; ele apenas ajuda a administrar
+
 ### 7. Alterar idioma
 
 1. Entre em `03`
@@ -273,6 +311,7 @@ O submenu concentra os fluxos de deploy e dados:
 - systemd
 - Nginx
 - HTTPS com Certbot
+- Painel web de bancos
 
 Esse menu abre com um painel limpo de status dos componentes principais, mostrando apenas se cada item esta ativo ou inativo.
 
