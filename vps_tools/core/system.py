@@ -1966,7 +1966,18 @@ class SystemActions:
             if not ok:
                 return False, msg
 
-            update(35, SystemActions._txt("Instalando Docker Engine e Compose", "Installing Docker Engine and Compose"))
+            update(35, SystemActions._txt("Aplicando configuracao segura do Docker", "Applying safe Docker configuration"))
+            os.makedirs("/etc/docker", exist_ok=True)
+            ok, msg = SystemActions._merge_json_file(
+                "/etc/docker/daemon.json",
+                {"ip-forward-no-drop": True},
+            )
+            if not ok:
+                return False, msg
+
+            subprocess.run(["iptables", "-P", "FORWARD", "ACCEPT"], capture_output=True, text=True, check=False)
+
+            update(45, SystemActions._txt("Instalando Docker Engine e Compose", "Installing Docker Engine and Compose"))
             result = subprocess.run(["apt-get", "update", "-y"], capture_output=True, text=True, check=False)
             if result.returncode != 0:
                 return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
@@ -1989,16 +2000,14 @@ class SystemActions:
                     "Docker Engine installation failed.",
                 )
 
-            update(45, SystemActions._txt("Aplicando configuracao segura do Docker", "Applying safe Docker configuration"))
-            ok, msg = SystemActions._merge_json_file(
-                "/etc/docker/daemon.json",
-                {"ip-forward-no-drop": True},
-            )
-            if not ok:
-                return False, msg
+            subprocess.run(["iptables", "-P", "FORWARD", "ACCEPT"], capture_output=True, text=True, check=False)
 
-            update(50, SystemActions._txt("Habilitando e iniciando o Docker", "Enabling and starting Docker"))
-            for cmd in (["systemctl", "enable", "docker"], ["systemctl", "restart", "docker"]):
+            update(55, SystemActions._txt("Habilitando e iniciando o Docker", "Enabling and starting Docker"))
+            for cmd in (
+                ["systemctl", "enable", "docker"],
+                ["systemctl", "enable", "docker.socket"],
+                ["systemctl", "restart", "docker"],
+            ):
                 result = subprocess.run(cmd, capture_output=True, text=True, check=False)
                 if result.returncode != 0:
                     return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
@@ -2007,6 +2016,13 @@ class SystemActions:
                     )
 
             subprocess.run(["iptables", "-P", "FORWARD", "ACCEPT"], capture_output=True, text=True, check=False)
+            docker_active = subprocess.run(["systemctl", "is-active", "docker"], capture_output=True, text=True, check=False)
+            if docker_active.returncode != 0 or docker_active.stdout.strip() != "active":
+                return False, (docker_active.stderr or docker_active.stdout or "").strip() or SystemActions._txt(
+                    "Docker nao ficou ativo apos o restart.",
+                    "Docker did not remain active after restart.",
+                )
+            iptables_result = subprocess.run(["iptables", "-S"], capture_output=True, text=True, check=False)
 
             compose_file = os.path.join(app_dir, "compose.yml")
             nginx_dir = os.path.join(app_dir, "nginx")
@@ -2091,6 +2107,7 @@ class SystemActions:
                 ],
                 "compose_status": (ps_result.stdout or ps_result.stderr or "").strip() if ps_result else "",
                 "docker_status": (docker_status.stdout or docker_status.stderr or "").strip(),
+                "iptables_status": (iptables_result.stdout or iptables_result.stderr or "").strip(),
                 "notes": [
                     SystemActions._txt("painel publicado apenas em 127.0.0.1 por padrao", "panel published only on 127.0.0.1 by default"),
                     SystemActions._txt("use host.docker.internal dentro dos paineis para acessar bancos da maquina", "use host.docker.internal inside the tools to access databases on the host machine"),
