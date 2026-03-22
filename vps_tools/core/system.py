@@ -294,6 +294,34 @@ class SystemActions:
             return False, str(exc)
 
     @staticmethod
+    def _merge_json_file(path: str, updates: dict):
+        data = {}
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    data = loaded
+                else:
+                    return False, SystemActions._txt(
+                        f"Arquivo JSON invalido para mesclagem: {path}",
+                        f"Invalid JSON file for merge: {path}",
+                    )
+            except Exception as exc:
+                return False, str(exc)
+        data.update(updates)
+        try:
+            parent = os.path.dirname(path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+                f.write("\n")
+            return True, path
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
     def _ubuntu_codename() -> str:
         os_release = SystemActions._read_os_release()
         for key in ("VERSION_CODENAME", "UBUNTU_CODENAME"):
@@ -1961,6 +1989,14 @@ class SystemActions:
                     "Docker Engine installation failed.",
                 )
 
+            update(45, SystemActions._txt("Aplicando configuracao segura do Docker", "Applying safe Docker configuration"))
+            ok, msg = SystemActions._merge_json_file(
+                "/etc/docker/daemon.json",
+                {"ip-forward-no-drop": True},
+            )
+            if not ok:
+                return False, msg
+
             update(50, SystemActions._txt("Habilitando e iniciando o Docker", "Enabling and starting Docker"))
             for cmd in (["systemctl", "enable", "docker"], ["systemctl", "restart", "docker"]):
                 result = subprocess.run(cmd, capture_output=True, text=True, check=False)
@@ -1969,6 +2005,8 @@ class SystemActions:
                         f"Falha ao executar: {' '.join(cmd)}",
                         f"Failed to execute: {' '.join(cmd)}",
                     )
+
+            subprocess.run(["iptables", "-P", "FORWARD", "ACCEPT"], capture_output=True, text=True, check=False)
 
             compose_file = os.path.join(app_dir, "compose.yml")
             nginx_dir = os.path.join(app_dir, "nginx")
@@ -2057,6 +2095,7 @@ class SystemActions:
                     SystemActions._txt("painel publicado apenas em 127.0.0.1 por padrao", "panel published only on 127.0.0.1 by default"),
                     SystemActions._txt("use host.docker.internal dentro dos paineis para acessar bancos da maquina", "use host.docker.internal inside the tools to access databases on the host machine"),
                     SystemActions._txt("nao abra a porta do painel para toda a internet", "do not expose the panel port to the entire internet"),
+                    SystemActions._txt("foi aplicado ip-forward-no-drop=true no Docker para evitar FORWARD DROP automatico", "ip-forward-no-drop=true was applied in Docker to avoid automatic FORWARD DROP"),
                 ],
             }
         except Exception as exc:
