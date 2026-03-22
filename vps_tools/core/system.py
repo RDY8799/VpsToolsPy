@@ -2419,8 +2419,12 @@ class SystemActions:
             "set -e\n"
             f'REPO_DIR="{repo_dir}"\n'
             'cd "$REPO_DIR"\n'
+            'export PYTHONPATH="$REPO_DIR${PYTHONPATH:+:$PYTHONPATH}"\n'
             'if [ -x "$REPO_DIR/.venv/bin/python" ]; then\n'
             '  exec "$REPO_DIR/.venv/bin/python" -m vps_tools.main "$@"\n'
+            "fi\n"
+            'if [ -x "$REPO_DIR/venv/bin/python" ]; then\n'
+            '  exec "$REPO_DIR/venv/bin/python" -m vps_tools.main "$@"\n'
             "fi\n"
             'exec python3 -m vps_tools.main "$@"\n'
         )
