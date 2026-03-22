@@ -134,6 +134,128 @@ Modulo dedicado para VNC com:
 4. Acoes obvias aceitam `Enter` como confirmacao padrao; acoes destrutivas continuam pedindo confirmacao explicita
 5. Selecao de usuario suporta setas + Enter ou digitacao manual
 
+## Tutorial de uso (PT-BR)
+
+### 1. Abrir o painel
+
+No servidor, entre na pasta do projeto e execute:
+
+```bash
+cd ~/VpsToolsPy
+source .venv/bin/activate
+python -m vps_tools.main
+```
+
+Se voce ja criou o comando global, basta usar:
+
+```bash
+menu
+```
+
+### 2. Entender o menu principal
+
+- `01` Instalador/configuracao de servicos: instala e gerencia proxy, VPN e tunel
+- `02` Gerenciamento de usuarios: cria, remove e ajusta usuarios SSH
+- `03` Ferramentas do sistema: swap, atualizacao, velocidade, comando global e utilitarios
+- `04` Banco de Dados / Backend: PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Spring Boot, systemd, Nginx e HTTPS
+
+### 3. Instalar um servico
+
+Exemplo com Squid:
+
+1. Entre em `01`
+2. Escolha `SQUID`
+3. Selecione `INSTALAR`
+4. Informe a porta desejada
+5. Confirme com `Enter` quando a confirmacao ja vier com `S/n`
+
+Depois da instalacao, volte ao mesmo menu do servico para:
+
+- iniciar
+- parar
+- reiniciar
+- desinstalar
+
+### 4. Criar e gerenciar usuarios SSH
+
+1. Entre em `02`
+2. Escolha `NOVO USUARIO`
+3. Informe:
+   - nome do usuario
+   - senha
+   - limite de conexoes
+   - data ou dias para expiracao
+
+No mesmo menu voce tambem pode:
+
+- apagar usuario
+- alterar limite
+- alterar expiracao
+- alterar senha
+- desconectar usuario
+- gerar backup
+- restaurar backup
+
+### 5. Preparar banco de dados e backend
+
+Fluxo recomendado para backend Java/Spring Boot:
+
+1. Entre em `04`
+2. Execute `CRIAR BANCO POSTGRESQL LOCAL`
+3. Informe nome do banco, usuario, senha, bind e porta JDBC
+4. Depois execute `PREPARAR BACKEND SPRING BOOT`
+5. Informe pasta da app, porta, variaveis do backend e, se quiser, URL do repositorio
+6. Revise os comandos gerados para subir o `.jar` ou clonar/buildar o projeto
+
+O painel desse menu mostra de forma compacta se `PostgreSQL`, `MySQL`, `MariaDB`, `MongoDB`, `Redis`, `Nginx` e `Certbot` estao ativos ou nao.
+
+### 6. Publicar com Nginx e HTTPS
+
+Ordem recomendada:
+
+1. Deixe o backend respondendo localmente em `127.0.0.1` na porta da aplicacao
+2. No menu `04`, configure `NGINX REVERSE PROXY`
+3. Aponte seu dominio para o IP da VPS
+4. Abra `80` e `443` no firewall/Security Group
+5. No menu `04`, execute `HTTPS COM CERTBOT`
+
+Boas praticas:
+
+- nao abra `5432` publicamente
+- mantenha o banco local quando possivel
+- so publique `80/443` depois que o backend estiver funcionando
+
+### 7. Alterar idioma
+
+1. Entre em `03`
+2. Abra `Power Tools`
+3. Escolha `IDIOMA / LANGUAGE`
+4. Digite o codigo do idioma disponivel, como `pt`, `en`, `es` ou outro cadastrado no arquivo de strings
+
+### 8. Ler status e logs
+
+Para diagnostico rapido, use:
+
+- `Power Tools -> STATUS DASHBOARD`
+- `Power Tools -> LOGS VIEWER`
+- `Power Tools -> HEALTH CHECK`
+- `Banco de Dados / Backend` para ver o painel de componentes ativos/inativos
+
+### 9. Atualizar o script
+
+Voce pode atualizar de duas formas:
+
+- pelo menu: `Ferramentas -> Atualizar script`
+- manualmente:
+
+```bash
+cd ~/VpsToolsPy
+git pull
+source .venv/bin/activate
+pip install -r requirements.txt
+python -m vps_tools.main
+```
+
 ## Banco de Dados / Backend
 
 No menu principal:
