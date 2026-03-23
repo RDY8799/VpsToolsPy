@@ -416,15 +416,18 @@ class VPSToolsApp:
             table.add_column(self._txt("Engine", "Engine"), style="white", width=12)
             table.add_column(self._txt("Timer", "Timer"), style="white", width=10)
             table.add_column(self._txt("Ultimo status", "Last status"), style="white", width=14)
+            table.add_column(self._txt("Ultimo restore", "Last restore"), style="white", width=14)
             table.add_column(self._txt("Destino", "Destination"), style="white")
             for job in jobs[:8]:
                 last_status = (job.get("last_status") or {}).get("status") or self._txt("sem execucao", "not run")
+                last_restore = (job.get("last_restore_test") or {}).get("status") or self._txt("nao testado", "not tested")
                 timer_active = (job.get("timer_active") or "").strip() == "active"
                 table.add_row(
                     job.get("job_name", "-"),
                     job.get("engine", "-"),
                     self._status_badge(timer_active),
                     str(last_status),
+                    str(last_restore),
                     job.get("backup_dir", "-"),
                 )
             self.ui.console.print(Panel(table, border_style="cyan"))
@@ -775,6 +778,7 @@ class VPSToolsApp:
         if ok:
             config = data.get("config") or {}
             last_status = data.get("last_status") or {}
+            last_restore_test = data.get("last_restore_test") or {}
             summary = (
                 f"[white]{self._txt('Job', 'Job')}:[/white] [cyan]{config.get('job_name', '-')}[/cyan]\n"
                 f"[white]Engine:[/white] [cyan]{config.get('engine', '-')}[/cyan]\n"
@@ -790,6 +794,9 @@ class VPSToolsApp:
                 f"[white]{self._txt('Ultimo status do secundario', 'Last secondary status')}:[/white] [cyan]{last_status.get('offsite_status', '-')}[/cyan]\n"
                 f"[white]{self._txt('Ultimo status do alerta', 'Last alert status')}:[/white] [cyan]{last_status.get('alert_status', '-')}[/cyan]\n"
                 f"[white]{self._txt('Ultimo status da criptografia', 'Last encryption status')}:[/white] [cyan]{last_status.get('encryption_status', '-')}[/cyan]\n"
+                f"[white]{self._txt('Ultimo restore test', 'Last restore test')}:[/white] [cyan]{last_restore_test.get('status', '-') or '-'}[/cyan]\n"
+                f"[white]{self._txt('Banco temporario do restore', 'Restore temporary database')}:[/white] [cyan]{last_restore_test.get('restore_db_name', '-') or '-'}[/cyan]\n"
+                f"[white]{self._txt('Duracao do restore', 'Restore duration')}:[/white] [cyan]{last_restore_test.get('duration_seconds', '-') or '-'}[/cyan]\n"
                 f"[white]{self._txt('Ultima mensagem', 'Last message')}:[/white] [cyan]{last_status.get('message', '-')}[/cyan]\n\n"
                 f"[white]Timer[/white]\n{data['timer_status'][-1600:]}\n\n"
                 f"[white]Service[/white]\n{data['service_status'][-1600:]}"
@@ -797,6 +804,45 @@ class VPSToolsApp:
             self.ui.console.print(Panel(summary, title=self._txt("STATUS DO BACKUP", "BACKUP STATUS"), border_style="blue"))
         else:
             self.ui.print_error(data)
+        self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+
+    def _dr_restore_test_flow(self):
+        if not self._confirm("teste automatico de restore"):
+            return
+        job_name = self._prompt_default("Nome do job", "Job name", "postgres-prod-diario")
+        restore_db_name = self._prompt_default(
+            "Nome do banco temporario de restore (vazio = gerar automaticamente)",
+            "Temporary restore database name (empty = auto-generate)",
+            "",
+        )
+        keep_restore_db = self._prompt_bool_default(
+            "Manter o banco temporario apos o teste",
+            "Keep the temporary database after the test",
+            False,
+        )
+
+        def worker(update):
+            return self.sys_actions.test_db_backup_restore(
+                job_name=job_name,
+                restore_db_name=restore_db_name,
+                keep_restore_db=keep_restore_db,
+                progress_callback=update,
+            )
+
+        ok, data = self.ui.run_animated_task(self._txt("Executando teste automatico de restore", "Running automatic restore test"), worker)
+        if ok:
+            summary = (
+                f"[white]{self._txt('Status', 'Status')}:[/white] [cyan]{data.get('status', '-')}[/cyan]\n"
+                f"[white]{self._txt('Artefato', 'Artifact')}:[/white] [cyan]{data.get('artifact_path', '-')}[/cyan]\n"
+                f"[white]{self._txt('Banco temporario', 'Temporary database')}:[/white] [cyan]{data.get('restore_db_name', '-')}[/cyan]\n"
+                f"[white]{self._txt('Qtd de tabelas', 'Table count')}:[/white] [cyan]{data.get('table_count', '-')}[/cyan]\n"
+                f"[white]{self._txt('Duracao', 'Duration')}:[/white] [cyan]{data.get('duration_seconds', '-')}[/cyan]\n"
+                f"[white]{self._txt('Mensagem', 'Message')}:[/white] [cyan]{data.get('message', '-')}[/cyan]"
+            )
+            self.ui.console.print(Panel(summary, title=self._txt("RESTORE TEST CONCLUIDO", "RESTORE TEST COMPLETED"), border_style="green"))
+        else:
+            message = data.get("message") if isinstance(data, dict) else data
+            self.ui.print_error(message)
         self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
 
     def _dr_export_config_flow(self):
@@ -1510,7 +1556,8 @@ class VPSToolsApp:
                 "02": self._txt("CONFIGURAR BACKUP LOGICO DE BANCO", "CONFIGURE LOGICAL DATABASE BACKUP"),
                 "03": self._txt("EXECUTAR BACKUP AGORA", "RUN BACKUP NOW"),
                 "04": self._txt("STATUS DO BACKUP", "BACKUP STATUS"),
-                "05": self._txt("EXPORTAR CONFIGURACOES DA VPS", "EXPORT VPS CONFIGURATION"),
+                "05": self._txt("TESTE AUTOMATICO DE RESTORE", "AUTOMATIC RESTORE TEST"),
+                "06": self._txt("EXPORTAR CONFIGURACOES DA VPS", "EXPORT VPS CONFIGURATION"),
                 "00": self.lang.t("menu.back", "VOLTAR"),
             }
             self.ui.draw_menu(options, self._txt("RECUPERACAO / DR", "RECOVERY / DR"))
@@ -1525,6 +1572,8 @@ class VPSToolsApp:
             elif option == "4":
                 self._dr_backup_status_flow()
             elif option == "5":
+                self._dr_restore_test_flow()
+            elif option == "6":
                 self._dr_export_config_flow()
             elif option == "00":
                 break

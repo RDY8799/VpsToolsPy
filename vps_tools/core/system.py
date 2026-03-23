@@ -549,6 +549,25 @@ class SystemActions:
         return "\n".join(lines) + "\n"
 
     @staticmethod
+    def _read_env_file(path: str) -> dict[str, str]:
+        values: dict[str, str] = {}
+        if not os.path.exists(path):
+            return values
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for raw_line in f:
+                    line = raw_line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    key, value = line.split("=", 1)
+                    safe_key = re.sub(r"[^A-Za-z0-9_]", "_", key or "").upper()
+                    parsed = shlex.split(value, posix=True)
+                    values[safe_key] = parsed[0] if parsed else value.strip().strip("'").strip('"')
+        except Exception:
+            return {}
+        return values
+
+    @staticmethod
     def _dr_root_dir() -> str:
         return "/opt/vps-tools/dr"
 
@@ -569,6 +588,8 @@ class SystemActions:
             "job_dir": job_dir,
             "config_file": os.path.join(job_dir, "job.json"),
             "status_file": os.path.join(job_dir, "last_status.json"),
+            "restore_status_file": os.path.join(job_dir, "last_restore_test.json"),
+            "restore_tests_dir": os.path.join(job_dir, "restore-tests"),
             "env_file": os.path.join(job_dir, "job.env"),
             "script_file": os.path.join(job_dir, "run-backup.sh"),
             "service_name": f"vps-tools-db-backup-{safe_job}",
@@ -1862,9 +1883,11 @@ class SystemActions:
                 timer_active = subprocess.run(["systemctl", "is-active", timer_name], capture_output=True, text=True, check=False)
                 timer_enabled = subprocess.run(["systemctl", "is-enabled", timer_name], capture_output=True, text=True, check=False)
                 last_status = SystemActions._read_json_file(os.path.join(base_dir, name, "last_status.json"), default={}) or {}
+                last_restore_test = SystemActions._read_json_file(os.path.join(base_dir, name, "last_restore_test.json"), default={}) or {}
                 config["timer_active"] = (timer_active.stdout or "").strip()
                 config["timer_enabled"] = (timer_enabled.stdout or "").strip()
                 config["last_status"] = last_status if isinstance(last_status, dict) else {}
+                config["last_restore_test"] = last_restore_test if isinstance(last_restore_test, dict) else {}
                 jobs.append(config)
             return jobs
         except Exception:
@@ -1905,14 +1928,245 @@ class SystemActions:
             timer_status = subprocess.run(["systemctl", "status", paths["timer_name"], "--no-pager"], capture_output=True, text=True, check=False)
             service_status = subprocess.run(["systemctl", "status", f"{paths['service_name']}.service", "--no-pager"], capture_output=True, text=True, check=False)
             last_status = SystemActions._read_json_file(paths["status_file"], default={}) or {}
+            last_restore_test = SystemActions._read_json_file(paths["restore_status_file"], default={}) or {}
             return True, {
                 "config": config if isinstance(config, dict) else {},
                 "timer_status": (timer_status.stdout or timer_status.stderr or "").strip(),
                 "service_status": (service_status.stdout or service_status.stderr or "").strip(),
                 "last_status": last_status if isinstance(last_status, dict) else {},
+                "last_restore_test": last_restore_test if isinstance(last_restore_test, dict) else {},
             }
         except Exception as exc:
             return False, str(exc)
+
+    @staticmethod
+    def test_db_backup_restore(
+        job_name: str,
+        restore_db_name: str = "",
+        keep_restore_db: bool = False,
+        progress_callback=None,
+    ):
+        def update(percent: int, text: str):
+            if progress_callback:
+                progress_callback(completed=percent, description=f"[cyan]{text}[/cyan]")
+
+        def finish(result_payload: dict, ok: bool):
+            SystemActions._write_json_file(paths["restore_status_file"], result_payload, mode=0o600)
+            return ok, result_payload
+
+        paths = SystemActions._dr_backup_job_paths(job_name)
+        started = time.time()
+        temp_dir = ""
+        decrypted_path = ""
+        temp_db_name = ""
+        try:
+            if os.name == "nt":
+                return False, SystemActions._txt(
+                    "Teste automatico de restore nao suportado no Windows.",
+                    "Automatic restore test is not supported on Windows.",
+                )
+            if not os.path.exists(paths["config_file"]):
+                return False, SystemActions._txt(
+                    f"Job de backup nao encontrado: {job_name}",
+                    f"Backup job not found: {job_name}",
+                )
+            config = SystemActions._read_json_file(paths["config_file"], default={}) or {}
+            if (config.get("engine") or "").strip().lower() != "postgresql":
+                return False, SystemActions._txt(
+                    "Teste automatico de restore disponivel no momento apenas para jobs PostgreSQL.",
+                    "Automatic restore test is currently available only for PostgreSQL jobs.",
+                )
+
+            last_status = SystemActions._read_json_file(paths["status_file"], default={}) or {}
+            artifact_path = (last_status.get("artifact_path") or "").strip()
+            if not artifact_path:
+                return False, SystemActions._txt(
+                    "Nenhum artefato de backup encontrado para testar o restore.",
+                    "No backup artifact was found to test the restore.",
+                )
+            if not os.path.exists(artifact_path):
+                return False, SystemActions._txt(
+                    f"Artefato do backup nao encontrado: {artifact_path}",
+                    f"Backup artifact not found: {artifact_path}",
+                )
+
+            env_vars = SystemActions._read_env_file(paths["env_file"])
+            timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+            temp_dir = os.path.join(paths["restore_tests_dir"], timestamp)
+            os.makedirs(temp_dir, exist_ok=True)
+
+            base_name = re.sub(r"[^A-Za-z0-9_]", "_", restore_db_name or "").strip("_")
+            if not base_name:
+                base_name = re.sub(r"[^A-Za-z0-9_]", "_", f"{paths['safe_job']}_restore_{timestamp.lower()}").strip("_")
+            if not re.match(r"^[A-Za-z_]", base_name):
+                base_name = f"r_{base_name}"
+            temp_db_name = base_name[:63]
+
+            update(10, SystemActions._txt("Preparando artefato para restore", "Preparing artifact for restore"))
+            restore_input = artifact_path
+            encryption_mode = (env_vars.get("ENCRYPTION_MODE") or "none").strip().lower()
+            if encryption_mode == "gpg_symmetric":
+                if not shutil.which("gpg"):
+                    payload = {
+                        "job_name": paths["safe_job"],
+                        "status": "failed",
+                        "message": "gpg not found for restore test",
+                        "artifact_path": artifact_path,
+                        "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        "duration_seconds": int(time.time() - started),
+                    }
+                    return finish(payload, False)
+                passphrase = env_vars.get("ENCRYPTION_PASSPHRASE") or ""
+                if not passphrase:
+                    payload = {
+                        "job_name": paths["safe_job"],
+                        "status": "failed",
+                        "message": "missing encryption passphrase for restore test",
+                        "artifact_path": artifact_path,
+                        "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        "duration_seconds": int(time.time() - started),
+                    }
+                    return finish(payload, False)
+                decrypted_path = os.path.join(temp_dir, "restore-input.dump")
+                result = subprocess.run(
+                    [
+                        "gpg",
+                        "--batch",
+                        "--yes",
+                        "--pinentry-mode",
+                        "loopback",
+                        "--passphrase-fd",
+                        "0",
+                        "--output",
+                        decrypted_path,
+                        "--decrypt",
+                        artifact_path,
+                    ],
+                    input=passphrase,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if result.returncode != 0:
+                    payload = {
+                        "job_name": paths["safe_job"],
+                        "status": "failed",
+                        "message": (result.stderr or result.stdout or "").strip() or "failed to decrypt backup artifact",
+                        "artifact_path": artifact_path,
+                        "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        "duration_seconds": int(time.time() - started),
+                    }
+                    return finish(payload, False)
+                restore_input = decrypted_path
+
+            update(35, SystemActions._txt("Criando banco temporario de restore", "Creating temporary restore database"))
+            drop_existing = SystemActions._run_as_postgres(
+                ["psql", "-v", "ON_ERROR_STOP=1", "-d", "postgres", "-c", f"DROP DATABASE IF EXISTS {temp_db_name};"]
+            )
+            if drop_existing.returncode != 0:
+                payload = {
+                    "job_name": paths["safe_job"],
+                    "status": "failed",
+                    "message": (drop_existing.stderr or drop_existing.stdout or "").strip() or "failed to drop previous restore database",
+                    "artifact_path": artifact_path,
+                    "restore_db_name": temp_db_name,
+                    "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "duration_seconds": int(time.time() - started),
+                }
+                return finish(payload, False)
+            create_db = SystemActions._run_as_postgres(
+                ["psql", "-v", "ON_ERROR_STOP=1", "-d", "postgres", "-c", f"CREATE DATABASE {temp_db_name};"]
+            )
+            if create_db.returncode != 0:
+                payload = {
+                    "job_name": paths["safe_job"],
+                    "status": "failed",
+                    "message": (create_db.stderr or create_db.stdout or "").strip() or "failed to create restore database",
+                    "artifact_path": artifact_path,
+                    "restore_db_name": temp_db_name,
+                    "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "duration_seconds": int(time.time() - started),
+                }
+                return finish(payload, False)
+
+            update(65, SystemActions._txt("Restaurando dump no banco temporario", "Restoring dump into temporary database"))
+            restore_result = SystemActions._run_as_postgres(
+                [
+                    "pg_restore",
+                    "--exit-on-error",
+                    "--no-owner",
+                    "--dbname",
+                    temp_db_name,
+                    restore_input,
+                ]
+            )
+            if restore_result.returncode != 0:
+                payload = {
+                    "job_name": paths["safe_job"],
+                    "status": "failed",
+                    "message": (restore_result.stderr or restore_result.stdout or "").strip() or "pg_restore failed",
+                    "artifact_path": artifact_path,
+                    "restore_db_name": temp_db_name,
+                    "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "duration_seconds": int(time.time() - started),
+                }
+                return finish(payload, False)
+
+            update(85, SystemActions._txt("Executando validacoes do banco restaurado", "Running restored database validations"))
+            db_name_check = SystemActions._run_as_postgres(["psql", "-d", temp_db_name, "-tAc", "SELECT current_database();"])
+            table_count_check = SystemActions._run_as_postgres(
+                [
+                    "psql",
+                    "-d",
+                    temp_db_name,
+                    "-tAc",
+                    "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname NOT IN ('pg_catalog','information_schema');",
+                ]
+            )
+            if db_name_check.returncode != 0 or table_count_check.returncode != 0:
+                payload = {
+                    "job_name": paths["safe_job"],
+                    "status": "failed",
+                    "message": (db_name_check.stderr or table_count_check.stderr or "").strip() or "restore validation queries failed",
+                    "artifact_path": artifact_path,
+                    "restore_db_name": temp_db_name,
+                    "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "duration_seconds": int(time.time() - started),
+                }
+                return finish(payload, False)
+
+            table_count_text = (table_count_check.stdout or "").strip() or "0"
+            payload = {
+                "job_name": paths["safe_job"],
+                "status": "success",
+                "message": "automatic restore test completed successfully",
+                "artifact_path": artifact_path,
+                "restore_db_name": temp_db_name,
+                "restore_input_path": restore_input,
+                "keep_restore_db": keep_restore_db,
+                "table_count": int(table_count_text),
+                "validated_database_name": (db_name_check.stdout or "").strip(),
+                "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "duration_seconds": int(time.time() - started),
+            }
+            update(100, SystemActions._txt("Teste automatico de restore concluido", "Automatic restore test completed"))
+            return finish(payload, True)
+        except Exception as exc:
+            payload = {
+                "job_name": paths["safe_job"],
+                "status": "failed",
+                "message": str(exc),
+                "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "duration_seconds": int(time.time() - started),
+            }
+            return finish(payload, False)
+        finally:
+            if temp_db_name and not keep_restore_db:
+                SystemActions._run_as_postgres(
+                    ["psql", "-v", "ON_ERROR_STOP=1", "-d", "postgres", "-c", f"DROP DATABASE IF EXISTS {temp_db_name};"]
+                )
+            if temp_dir:
+                shutil.rmtree(temp_dir, ignore_errors=True)
 
     @staticmethod
     def export_vps_config_snapshot(

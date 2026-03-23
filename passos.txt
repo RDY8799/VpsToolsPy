@@ -117,6 +117,33 @@ Resultado real da validacao da fase 4 no servidor:
   [x] Offsite real ainda pendente; a validacao desta fase cobre criptografia local e copia secundaria local criptografada
   [x] RPO/RTO ainda nao comparados porque o perfil operacional final ainda nao foi fechado
 
+[x] FASE 5 IMPLEMENTADA
+  [x] Adicionar teste automatico de restore ao modulo DR
+  [x] Restaurar o ultimo artefato do job em banco temporario
+  [x] Suportar restore test para artefato criptografado com GPG
+  [x] Validar o dump restaurado com consultas simples
+  [x] Salvar status do ultimo restore test
+  [x] Exibir status do restore test no painel DR
+  [x] Medir duracao do restore
+  [x] Validar a fase 5 no servidor real
+  [x] Registrar resultado real da validacao da fase 5
+
+Resultado real da validacao da fase 5 no servidor:
+  [x] Servidor validado: api.dinvendas.com
+  [x] Job de teste utilizado: hospital-dr-stage4
+  [x] Artefato utilizado: backup PostgreSQL criptografado .dump.gpg
+  [x] Tempo real da execucao do restore test: 1.48s
+  [x] Duracao real registrada no ultimo restore test: 1s
+  [x] Banco temporario de restore criado com sucesso
+  [x] Dump descriptografado automaticamente para o teste
+  [x] Restore executado com sucesso em banco temporario
+  [x] Validacao do banco restaurado concluida com sucesso
+  [x] Qtd de tabelas validada no banco restaurado: 25
+  [x] Status do restore test salvo com sucesso
+  [x] Banco temporario removido ao final do teste
+  [x] Diretorio temporario do restore test limpo ao final do teste
+  [x] RPO/RTO ainda nao comparados porque o perfil operacional final ainda nao foi fechado
+
 [ ] DEFINIR RPO E RTO
   [x] Criar estrutura para definir RPO por sistema, banco e ambiente
   [x] Criar estrutura para definir RTO por sistema, banco e ambiente
@@ -136,9 +163,9 @@ Resultado real da validacao da fase 4 no servidor:
   [ ] Versionar backups offsite
   [x] Validar espaco livre antes do backup
   [ ] Validar integridade do banco antes do dump, quando aplicavel
-  [ ] Testar restore automatico
+  [x] Testar restore automatico
   [x] Medir duracao do backup
-  [ ] Medir duracao do restore
+  [x] Medir duracao do restore
   [x] Exportar configs da VPS
   [ ] Checar saude de servicos
   [ ] Monitorar SSL
@@ -198,7 +225,7 @@ Resultado real da validacao da fase 4 no servidor:
 
 [ ] EXEMPLOS DE DECISAO
   [x] Backup diario automatico: sim
-  [ ] Restore de teste automatico: sim
+  [x] Restore de teste automatico: sim
   [ ] Promocao de replica para primaria: com confirmacao
   [ ] Troca de DNS de producao: com confirmacao
   [ ] Restore em producao: manual / assistido
