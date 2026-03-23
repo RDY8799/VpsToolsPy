@@ -303,6 +303,7 @@ function Dashboard({overview, tasks}) {
   const activeComponents = data.components.filter((item) => item.active).length;
   const installedComponents = data.components.filter((item) => item.installed).length;
   const runningTasks = tasks.filter((task) => task.state === "running").length;
+  const topPorts = data.open_ports.slice(0, 8);
 
   return (
     <div className="dashboard-layout">
@@ -327,7 +328,7 @@ function Dashboard({overview, tasks}) {
         </div>
       </section>
 
-      <section className="panel-card">
+      <section className="panel-card dashboard-health">
         <div className="card-header">
           <div>
             <div className="eyebrow">Saude</div>
@@ -342,7 +343,7 @@ function Dashboard({overview, tasks}) {
         </div>
       </section>
 
-      <section className="panel-card">
+      <section className="panel-card dashboard-ports">
         <div className="card-header">
           <div>
             <div className="eyebrow">Acesso</div>
@@ -350,8 +351,8 @@ function Dashboard({overview, tasks}) {
           </div>
           <span className="count-pill">{data.open_ports.length}</span>
         </div>
-        <div className="port-list">
-          {data.open_ports.length ? data.open_ports.map((port) => (
+        <div className="port-list port-grid">
+          {topPorts.length ? topPorts.map((port) => (
             <div className="port-card" key={`${port.protocol}-${port.host}-${port.port}`}>
               <div className="port-card-top">
                 <strong>{port.port || "-"}</strong>
@@ -362,6 +363,9 @@ function Dashboard({overview, tasks}) {
             </div>
           )) : <div className="empty-box">Nenhuma porta listada neste momento.</div>}
         </div>
+        {data.open_ports.length > topPorts.length ? (
+          <div className="section-footnote">Mostrando as {topPorts.length} primeiras portas detectadas.</div>
+        ) : null}
       </section>
 
       <section className="panel-card full-span">
@@ -404,6 +408,20 @@ function Metric({label, value, hint, tone = "ink"}) {
 }
 
 function ActionsPanel({actions, onRunAction, runningAction}) {
+  const [selectedActionId, setSelectedActionId] = useState(actions[0]?.id || "");
+
+  useEffect(() => {
+    if (!actions.length) {
+      setSelectedActionId("");
+      return;
+    }
+    if (!actions.some((action) => action.id === selectedActionId)) {
+      setSelectedActionId(actions[0].id);
+    }
+  }, [actions, selectedActionId]);
+
+  const selectedAction = actions.find((action) => action.id === selectedActionId) || actions[0] || null;
+
   return (
     <div className="actions-layout">
       <section className="panel-card section-intro">
@@ -414,10 +432,47 @@ function ActionsPanel({actions, onRunAction, runningAction}) {
           envie e acompanhe a execucao na aba de tarefas.
         </p>
       </section>
-      <div className="actions-grid">
-        {actions.map((action) => (
-          <ActionCard key={action.id} action={action} onRunAction={onRunAction} running={runningAction === action.id} />
-        ))}
+
+      <div className="actions-workspace">
+        <section className="panel-card action-browser">
+          <div className="card-header">
+            <div>
+              <div className="eyebrow">Escolha uma automacao</div>
+              <h3>Catalogo de acoes</h3>
+            </div>
+            <span className="count-pill">{actions.length}</span>
+          </div>
+
+          <div className="action-browser-list">
+            {actions.map((action) => (
+              <button
+                key={action.id}
+                className={selectedAction?.id === action.id ? "action-summary-card active" : "action-summary-card"}
+                onClick={() => setSelectedActionId(action.id)}
+              >
+                <div className="action-summary-top">
+                  <strong>{action.label}</strong>
+                  <span className="count-pill">{action.schema.length}</span>
+                </div>
+                <small>{action.category}</small>
+                <p>{action.description}</p>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel-card action-stage">
+          {selectedAction ? (
+            <ActionCard
+              key={selectedAction.id}
+              action={selectedAction}
+              onRunAction={onRunAction}
+              running={runningAction === selectedAction.id}
+            />
+          ) : (
+            <div className="empty-box">Nenhuma automacao disponivel no momento.</div>
+          )}
+        </section>
       </div>
     </div>
   );
@@ -433,7 +488,7 @@ function ActionCard({action, onRunAction, running}) {
   });
 
   return (
-    <section className="panel-card action-card">
+    <section className="action-card">
       <div className="action-card-head">
         <div>
           <div className="eyebrow">{action.category}</div>
@@ -449,14 +504,16 @@ function ActionCard({action, onRunAction, running}) {
           onRunAction(action.id, form);
         }}
       >
-        {action.schema.map((field) => (
-          <Field
-            key={field.name}
-            field={field}
-            value={form[field.name]}
-            onChange={(value) => setForm((current) => ({...current, [field.name]: value}))}
-          />
-        ))}
+        <div className="form-grid">
+          {action.schema.map((field) => (
+            <Field
+              key={field.name}
+              field={field}
+              value={form[field.name]}
+              onChange={(value) => setForm((current) => ({...current, [field.name]: value}))}
+            />
+          ))}
+        </div>
         <button className="primary-button" type="submit" disabled={running}>
           {running ? "Enviando..." : "Executar automacao"}
         </button>
@@ -468,7 +525,7 @@ function ActionCard({action, onRunAction, running}) {
 function Field({field, value, onChange}) {
   if (field.type === "boolean") {
     return (
-      <label className="toggle-field">
+      <label className="toggle-field full-width-field">
         <div>
           <strong>{field.label}</strong>
           <small>Alterna este comportamento na execucao.</small>
@@ -493,7 +550,7 @@ function Field({field, value, onChange}) {
 
   if (field.type === "textarea") {
     return (
-      <label>
+      <label className="full-width-field">
         <span className="field-label">{field.label}</span>
         <textarea value={value} onChange={(event) => onChange(event.target.value)} rows={4} />
       </label>
