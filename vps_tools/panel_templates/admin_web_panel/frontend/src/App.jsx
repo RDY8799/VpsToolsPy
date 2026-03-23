@@ -220,11 +220,11 @@ function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="sidebar-brand">
-          <div className="brand-mark">VT</div>
+          <div className="brand-mark">VP</div>
           <div>
             <div className="eyebrow">Painel operacional</div>
             <h2>VpsToolsPy</h2>
-            <p>Controle visual para deploy, banco, monitoramento e DR.</p>
+            <p>Operacao de VPS, banco, backend e recuperacao em um unico painel.</p>
           </div>
         </div>
 
@@ -268,15 +268,18 @@ function App() {
 
       <main className="content-shell">
         <header className="topbar panel-card">
-          <div>
-            <div className="eyebrow">Visao atual</div>
-            <h1>{TABS.find((tab) => tab.id === activeTab)?.label || "Painel"}</h1>
-            <p className="topbar-copy">
-              Layout grafico para acompanhar o servidor, executar automacoes e verificar tudo o que esta ativo.
-            </p>
+          <div className="topbar-main">
+            <div>
+              <div className="eyebrow">Visao atual</div>
+              <h1>{TABS.find((tab) => tab.id === activeTab)?.label || "Painel"}</h1>
+              <p className="topbar-copy">
+                Acompanhe recursos do servidor, execute rotinas do script e veja o estado operacional em tempo real.
+              </p>
+            </div>
           </div>
           <div className="topbar-side">
             <div className="status-pill">Host {overview?.overview?.script?.hostname || "unknown"}</div>
+            <div className="status-pill">Script {overview?.panel?.scriptVersion || "unknown"}</div>
             <div className="status-pill accent">{overview?.overview?.script?.public_ip || "sem IP"}</div>
           </div>
         </header>
