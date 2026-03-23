@@ -1,10 +1,10 @@
 import {useEffect, useMemo, useRef, useState} from "react";
 
 const TABS = [
-  {id: "dashboard", label: "Visão geral"},
-  {id: "actions", label: "Ações"},
-  {id: "tasks", label: "Tarefas"},
-  {id: "about", label: "Sobre"}
+  {id: "dashboard", label: "Dashboard", kicker: "Resumo visual"},
+  {id: "actions", label: "Automacoes", kicker: "Executar tarefas"},
+  {id: "tasks", label: "Fila de tarefas", kicker: "Progresso em tempo real"},
+  {id: "about", label: "Sobre", kicker: "Metadados do painel"}
 ];
 
 async function apiFetch(path, options = {}) {
@@ -29,19 +29,24 @@ function LoginForm({onLogin, loading, error}) {
 
   return (
     <div className="login-shell">
+      <div className="login-orb login-orb-left" />
+      <div className="login-orb login-orb-right" />
       <div className="login-card">
         <div className="eyebrow">VpsToolsPy</div>
-        <h1>Painel web administrativo</h1>
-        <p>Faça login para acompanhar o servidor, abrir tarefas e executar automações com progresso em tempo real.</p>
+        <h1>Painel administrativo</h1>
+        <p>
+          Acesse o servidor, acompanhe recursos instalados, execute automacoes
+          e veja o progresso sem ficar preso ao terminal.
+        </p>
         <form
+          className="stack"
           onSubmit={(event) => {
             event.preventDefault();
             onLogin({username, password});
           }}
-          className="stack"
         >
           <label>
-            Usuário
+            Usuario
             <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" />
           </label>
           <label>
@@ -50,7 +55,7 @@ function LoginForm({onLogin, loading, error}) {
           </label>
           {error ? <div className="error-box">{error}</div> : null}
           <button className="primary-button" type="submit" disabled={loading}>
-            {loading ? "Entrando..." : "Entrar"}
+            {loading ? "Entrando..." : "Entrar no painel"}
           </button>
         </form>
       </div>
@@ -93,7 +98,7 @@ function App() {
       if (me.authenticated) {
         await loadApp();
       }
-    } catch (error) {
+    } catch {
       setAuth({authenticated: false});
     } finally {
       setLoadingAuth(false);
@@ -124,6 +129,7 @@ function App() {
     if (eventSources.current[selectedTask.id]) {
       return undefined;
     }
+
     const source = new EventSource(`/api/tasks/${selectedTask.id}/stream`);
     eventSources.current[selectedTask.id] = source;
     source.onmessage = (event) => {
@@ -142,12 +148,12 @@ function App() {
           }
           if (payload.type === "started") {
             next.state = "running";
-            next.message = "Execução iniciada";
+            next.message = "Execucao iniciada";
           }
           if (payload.type === "result") {
             next.state = payload.ok ? "completed" : "failed";
             next.result = payload.data;
-            next.message = payload.ok ? "Concluído" : "Falhou";
+            next.message = payload.ok ? "Concluido" : "Falhou";
             next.progress = payload.ok ? 100 : next.progress;
           }
           return next;
@@ -173,8 +179,8 @@ function App() {
         body: JSON.stringify({username, password})
       });
       await refreshAuth();
-    } catch (error) {
-      setLoginError("Credenciais inválidas.");
+    } catch {
+      setLoginError("Credenciais invalidas.");
       setLoadingAuth(false);
     }
   };
@@ -213,35 +219,69 @@ function App() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div>
-          <div className="eyebrow">Painel</div>
-          <h2>VpsToolsPy</h2>
-          <p>Operação visual do servidor com execução assistida e histórico de tarefas.</p>
+        <div className="sidebar-brand">
+          <div className="brand-mark">VT</div>
+          <div>
+            <div className="eyebrow">Painel operacional</div>
+            <h2>VpsToolsPy</h2>
+            <p>Controle visual para deploy, banco, monitoramento e DR.</p>
+          </div>
         </div>
-        <nav className="nav-stack">
-          {TABS.map((tab) => (
-            <button
-              key={tab.id}
-              className={activeTab === tab.id ? "nav-item active" : "nav-item"}
-              onClick={() => setActiveTab(tab.id)}
-            >
-              {tab.label}
+
+        <div className="sidebar-group">
+          <div className="section-label">Navegacao</div>
+          <nav className="nav-stack">
+            {TABS.map((tab) => (
+              <button
+                key={tab.id}
+                className={activeTab === tab.id ? "nav-item active" : "nav-item"}
+                onClick={() => setActiveTab(tab.id)}
+              >
+                <strong>{tab.label}</strong>
+                <small>{tab.kicker}</small>
+              </button>
+            ))}
+          </nav>
+        </div>
+
+        <div className="sidebar-group">
+          <div className="section-label">Sessao</div>
+          <div className="sidebar-card">
+            <div className="status-row">
+              <span>Usuario</span>
+              <strong>{auth.username}</strong>
+            </div>
+            <div className="status-row">
+              <span>Versao do script</span>
+              <strong>{overview?.panel?.scriptVersion || "unknown"}</strong>
+            </div>
+            <div className="status-row">
+              <span>Tarefas recentes</span>
+              <strong>{tasks.length}</strong>
+            </div>
+            <button className="ghost-button logout-button" onClick={handleLogout}>
+              Sair do painel
             </button>
-          ))}
-        </nav>
-        <button className="ghost-button" onClick={handleLogout}>Sair</button>
+          </div>
+        </div>
       </aside>
 
       <main className="content-shell">
-        <header className="topbar">
+        <header className="topbar panel-card">
           <div>
-            <div className="eyebrow">Usuário autenticado</div>
-            <strong>{auth.username}</strong>
+            <div className="eyebrow">Visao atual</div>
+            <h1>{TABS.find((tab) => tab.id === activeTab)?.label || "Painel"}</h1>
+            <p className="topbar-copy">
+              Layout grafico para acompanhar o servidor, executar automacoes e verificar tudo o que esta ativo.
+            </p>
           </div>
-          <div className="status-pill">{overview?.panel?.scriptVersion || "unknown"}</div>
+          <div className="topbar-side">
+            <div className="status-pill">Host {overview?.overview?.script?.hostname || "unknown"}</div>
+            <div className="status-pill accent">{overview?.overview?.script?.public_ip || "sem IP"}</div>
+          </div>
         </header>
 
-        {activeTab === "dashboard" ? <Dashboard overview={overview} /> : null}
+        {activeTab === "dashboard" ? <Dashboard overview={overview} tasks={tasks} /> : null}
         {activeTab === "actions" ? (
           <ActionsPanel actions={actions} runningAction={submittingAction} onRunAction={handleRunAction} />
         ) : null}
@@ -254,94 +294,131 @@ function App() {
   );
 }
 
-function Dashboard({overview}) {
+function Dashboard({overview, tasks}) {
   if (!overview) {
-    return <div className="panel-card">Carregando visão geral...</div>;
+    return <div className="panel-card">Carregando visao geral...</div>;
   }
+
   const data = overview.overview;
+  const activeComponents = data.components.filter((item) => item.active).length;
+  const installedComponents = data.components.filter((item) => item.installed).length;
+  const runningTasks = tasks.filter((task) => task.state === "running").length;
+
   return (
-    <div className="grid-layout">
+    <div className="dashboard-layout">
       <section className="panel-card hero-card">
-        <div className="eyebrow">Servidor</div>
-        <h1>{data.script.hostname}</h1>
-        <p>{data.script.os}</p>
-        <div className="pill-row">
-          <span className="status-pill">IP {data.script.public_ip}</span>
-          <span className="status-pill">Python {data.script.python}</span>
+        <div className="hero-grid">
+          <div>
+            <div className="eyebrow">Host principal</div>
+            <h2>{data.script.hostname}</h2>
+            <p className="hero-copy">
+              Ambiente visual para administrar recursos do script, acompanhar o estado do host e disparar tarefas com retorno em tempo real.
+            </p>
+            <div className="pill-row">
+              <span className="status-pill">SO {data.script.os}</span>
+              <span className="status-pill">Python {data.script.python}</span>
+            </div>
+          </div>
+          <div className="hero-stats">
+            <Metric tone="teal" label="Ativos agora" value={String(activeComponents)} hint="componentes respondendo" />
+            <Metric tone="amber" label="Instalados" value={String(installedComponents)} hint="componentes detectados" />
+            <Metric tone="ink" label="Tarefas rodando" value={String(runningTasks)} hint="execucoes em progresso" />
+          </div>
         </div>
       </section>
+
       <section className="panel-card">
-        <h3>Saúde do host</h3>
-        <div className="metric-grid">
-          <Metric label="CPU" value={`${data.system.cpu_percent}%`} />
-          <Metric label="RAM livre" value={`${data.system.ram.free} MB`} />
-          <Metric label="RAM total" value={`${data.system.ram.total} MB`} />
-          <Metric label="Swap livre" value={`${data.system.swap.free} MB`} />
+        <div className="card-header">
+          <div>
+            <div className="eyebrow">Saude</div>
+            <h3>Recursos do host</h3>
+          </div>
+        </div>
+        <div className="metric-grid metric-grid-dense">
+          <Metric tone="teal" label="CPU" value={`${data.system.cpu_percent}%`} hint="uso atual" />
+          <Metric tone="ink" label="RAM livre" value={`${data.system.ram.free} MB`} hint={`de ${data.system.ram.total} MB`} />
+          <Metric tone="amber" label="RAM usada" value={`${data.system.ram.used} MB`} hint={`${data.system.ram.percent}% ocupada`} />
+          <Metric tone="ink" label="Swap livre" value={`${data.system.swap.free} MB`} hint={`de ${data.system.swap.total} MB`} />
         </div>
       </section>
-      <section className="panel-card full-span">
-        <h3>Componentes</h3>
-        <table className="table">
-          <thead>
-          <tr>
-            <th>Recurso</th>
-            <th>Instalado</th>
-            <th>Status</th>
-          </tr>
-          </thead>
-          <tbody>
-          {data.components.map((component) => (
-            <tr key={component.key}>
-              <td>{component.name}</td>
-              <td>{component.installed ? "Sim" : "Não"}</td>
-              <td><span className={component.active ? "state-green" : "state-red"}>{component.status}</span></td>
-            </tr>
-          ))}
-          </tbody>
-        </table>
+
+      <section className="panel-card">
+        <div className="card-header">
+          <div>
+            <div className="eyebrow">Acesso</div>
+            <h3>Portas abertas</h3>
+          </div>
+          <span className="count-pill">{data.open_ports.length}</span>
+        </div>
+        <div className="port-list">
+          {data.open_ports.length ? data.open_ports.map((port) => (
+            <div className="port-card" key={`${port.protocol}-${port.host}-${port.port}`}>
+              <div className="port-card-top">
+                <strong>{port.port || "-"}</strong>
+                <span>{port.protocol}</span>
+              </div>
+              <small>{port.host}</small>
+              <p>{port.process || "processo nao informado"}</p>
+            </div>
+          )) : <div className="empty-box">Nenhuma porta listada neste momento.</div>}
+        </div>
       </section>
+
       <section className="panel-card full-span">
-        <h3>Portas abertas</h3>
-        <table className="table">
-          <thead>
-          <tr>
-            <th>Proto</th>
-            <th>Host</th>
-            <th>Porta</th>
-            <th>Processo</th>
-          </tr>
-          </thead>
-          <tbody>
-          {data.open_ports.map((port) => (
-            <tr key={`${port.protocol}-${port.host}-${port.port}`}>
-              <td>{port.protocol}</td>
-              <td>{port.host}</td>
-              <td>{port.port}</td>
-              <td>{port.process}</td>
-            </tr>
+        <div className="card-header">
+          <div>
+            <div className="eyebrow">Inventario</div>
+            <h3>Componentes do servidor</h3>
+          </div>
+          <span className="count-pill">{data.components.length}</span>
+        </div>
+        <div className="component-grid">
+          {data.components.map((component) => (
+            <div className="component-card" key={component.key}>
+              <div className="component-card-top">
+                <strong>{component.name}</strong>
+                <span className={component.active ? "state-pill state-pill-green" : "state-pill state-pill-red"}>
+                  {component.status}
+                </span>
+              </div>
+              <div className="component-meta">
+                <span>{component.installed ? "Instalado" : "Nao instalado"}</span>
+                <span>{component.active ? "Respondendo" : "Parado ou indisponivel"}</span>
+              </div>
+            </div>
           ))}
-          </tbody>
-        </table>
+        </div>
       </section>
     </div>
   );
 }
 
-function Metric({label, value}) {
+function Metric({label, value, hint, tone = "ink"}) {
   return (
-    <div className="metric-card">
+    <div className={`metric-card metric-${tone}`}>
       <small>{label}</small>
       <strong>{value}</strong>
+      <span>{hint}</span>
     </div>
   );
 }
 
 function ActionsPanel({actions, onRunAction, runningAction}) {
   return (
-    <div className="actions-grid">
-      {actions.map((action) => (
-        <ActionCard key={action.id} action={action} onRunAction={onRunAction} running={runningAction === action.id} />
-      ))}
+    <div className="actions-layout">
+      <section className="panel-card section-intro">
+        <div className="eyebrow">Catalogo</div>
+        <h2>Automacoes disponiveis</h2>
+        <p>
+          Cada card representa uma acao operacional do script. Preencha os campos,
+          envie e acompanhe a execucao na aba de tarefas.
+        </p>
+      </section>
+      <div className="actions-grid">
+        {actions.map((action) => (
+          <ActionCard key={action.id} action={action} onRunAction={onRunAction} running={runningAction === action.id} />
+        ))}
+      </div>
     </div>
   );
 }
@@ -357,8 +434,13 @@ function ActionCard({action, onRunAction, running}) {
 
   return (
     <section className="panel-card action-card">
-      <div className="eyebrow">{action.category}</div>
-      <h3>{action.label}</h3>
+      <div className="action-card-head">
+        <div>
+          <div className="eyebrow">{action.category}</div>
+          <h3>{action.label}</h3>
+        </div>
+        <span className="count-pill">{action.schema.length} campos</span>
+      </div>
       <p>{action.description}</p>
       <form
         className="stack"
@@ -376,7 +458,7 @@ function ActionCard({action, onRunAction, running}) {
           />
         ))}
         <button className="primary-button" type="submit" disabled={running}>
-          {running ? "Enviando..." : "Executar"}
+          {running ? "Enviando..." : "Executar automacao"}
         </button>
       </form>
     </section>
@@ -387,15 +469,19 @@ function Field({field, value, onChange}) {
   if (field.type === "boolean") {
     return (
       <label className="toggle-field">
-        <span>{field.label}</span>
+        <div>
+          <strong>{field.label}</strong>
+          <small>Alterna este comportamento na execucao.</small>
+        </div>
         <input type="checkbox" checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} />
       </label>
     );
   }
+
   if (field.type === "select") {
     return (
       <label>
-        {field.label}
+        <span className="field-label">{field.label}</span>
         <select value={value} onChange={(event) => onChange(event.target.value)}>
           {(field.options || []).map((option) => (
             <option value={option} key={option}>{option}</option>
@@ -404,17 +490,19 @@ function Field({field, value, onChange}) {
       </label>
     );
   }
+
   if (field.type === "textarea") {
     return (
       <label>
-        {field.label}
+        <span className="field-label">{field.label}</span>
         <textarea value={value} onChange={(event) => onChange(event.target.value)} rows={4} />
       </label>
     );
   }
+
   return (
     <label>
-      {field.label}
+      <span className="field-label">{field.label}</span>
       <input
         type={field.type === "password" ? "password" : field.type === "number" ? "number" : "text"}
         value={value}
@@ -427,36 +515,62 @@ function Field({field, value, onChange}) {
 function TasksPanel({tasks, selectedTask, onSelectTask}) {
   return (
     <div className="task-layout">
-      <section className="panel-card">
-        <h3>Tarefas recentes</h3>
+      <section className="panel-card task-rail">
+        <div className="card-header">
+          <div>
+            <div className="eyebrow">Fila</div>
+            <h3>Tarefas recentes</h3>
+          </div>
+          <span className="count-pill">{tasks.length}</span>
+        </div>
         <div className="task-list">
-          {tasks.map((task) => (
+          {tasks.length ? tasks.map((task) => (
             <button
               key={task.id}
               className={selectedTask?.id === task.id ? "task-item active" : "task-item"}
               onClick={() => onSelectTask(task.id)}
             >
-              <strong>{task.action}</strong>
+              <div className="task-item-top">
+                <strong>{task.action}</strong>
+                <span className={`state-pill ${task.state === "completed" ? "state-pill-green" : task.state === "failed" ? "state-pill-red" : "state-pill-amber"}`}>
+                  {task.state}
+                </span>
+              </div>
               <span>{task.message}</span>
-              <small>{task.state}</small>
+              <small>{task.id}</small>
             </button>
-          ))}
+          )) : <div className="empty-box">Nenhuma tarefa enviada ainda.</div>}
         </div>
       </section>
-      <section className="panel-card">
+
+      <section className="panel-card task-stage">
         {selectedTask ? (
           <>
-            <h3>{selectedTask.action}</h3>
+            <div className="card-header">
+              <div>
+                <div className="eyebrow">Execucao selecionada</div>
+                <h3>{selectedTask.action}</h3>
+              </div>
+              <span className="count-pill">{selectedTask.progress || 0}%</span>
+            </div>
+
+            <div className="task-summary-grid">
+              <Metric tone="teal" label="Estado" value={selectedTask.state} hint="status atual" />
+              <Metric tone="amber" label="Progresso" value={`${selectedTask.progress || 0}%`} hint="etapa concluida" />
+              <Metric tone="ink" label="Eventos" value={String((selectedTask.events || []).length)} hint="linhas recebidas" />
+            </div>
+
             <div className="progress-bar">
               <div style={{width: `${selectedTask.progress || 0}%`}} />
             </div>
-            <p>{selectedTask.message}</p>
+
+            <p className="task-message">{selectedTask.message}</p>
             <pre className="log-box">
-              {(selectedTask.events || []).map((event, index) => JSON.stringify(event, null, 2)).join("\n\n")}
+              {(selectedTask.events || []).map((event) => JSON.stringify(event, null, 2)).join("\n\n")}
             </pre>
           </>
         ) : (
-          <p>Nenhuma tarefa enviada ainda.</p>
+          <div className="empty-box">Selecione uma tarefa para ver o progresso detalhado.</div>
         )}
       </section>
     </div>
@@ -467,21 +581,42 @@ function AboutPanel({overview}) {
   if (!overview) {
     return <div className="panel-card">Carregando metadados...</div>;
   }
+
   return (
-    <section className="panel-card">
-      <div className="eyebrow">Sobre o projeto</div>
-      <h2>VpsToolsPy Admin Panel</h2>
-      <p>
-        Interface web do script para inventário, operação assistida e execução de automações com
-        acompanhamento de progresso pelo navegador.
-      </p>
-      <ul className="about-list">
-        <li>Script version: {overview.panel.scriptVersion}</li>
-        <li>Panel version: {overview.panel.panelVersion}</li>
-        <li>Repo dir: {overview.panel.repoDir}</li>
-        <li>Python command: {overview.panel.pythonCommand}</li>
-      </ul>
-    </section>
+    <div className="about-layout">
+      <section className="panel-card">
+        <div className="eyebrow">Painel</div>
+        <h2>VpsToolsPy Admin Panel</h2>
+        <p>
+          Interface web do script para inventario, operacao assistida, deploy,
+          banco de dados, monitoramento e recuperacao.
+        </p>
+      </section>
+
+      <section className="panel-card">
+        <div className="card-header">
+          <div>
+            <div className="eyebrow">Metadados</div>
+            <h3>Informacoes tecnicas</h3>
+          </div>
+        </div>
+        <div className="info-list">
+          <InfoRow label="Script version" value={overview.panel.scriptVersion} />
+          <InfoRow label="Panel version" value={overview.panel.panelVersion} />
+          <InfoRow label="Repo dir" value={overview.panel.repoDir} />
+          <InfoRow label="Python command" value={overview.panel.pythonCommand} />
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function InfoRow({label, value}) {
+  return (
+    <div className="info-row">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
   );
 }
 
