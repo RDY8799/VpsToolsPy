@@ -325,6 +325,10 @@ class VPSToolsApp:
                 return False
             self.ui.print_error(self._txt("Resposta invalida.", "Invalid answer."))
 
+    def _prompt_csv_default(self, prompt_pt: str, prompt_en: str, default: str = "") -> list[str]:
+        raw = self._prompt_default(prompt_pt, prompt_en, default)
+        return [item.strip() for item in raw.split(",") if item.strip()]
+
     def _status_badge(self, active: bool) -> str:
         return (
             f"[bold green]{self._txt('ATIVO', 'ACTIVE')}[/bold green]"
@@ -382,6 +386,8 @@ class VPSToolsApp:
     def _dr_status_panel(self):
         profiles = self.sys_actions.list_dr_profiles()
         jobs = self.sys_actions.list_db_backup_jobs()
+        monitor_ok, monitor_data = self.sys_actions.dr_monitor_status("default")
+        runbooks = self.sys_actions.list_dr_runbooks()
 
         summary = Table(
             title=self._txt("[bold yellow]RECUPERACAO / DR[/bold yellow]", "[bold yellow]RECOVERY / DR[/bold yellow]"),
@@ -402,6 +408,18 @@ class VPSToolsApp:
             self._txt("Jobs de backup", "Backup jobs"),
             self._status_badge(bool(jobs)),
             self._txt(f"{len(jobs)} job(s), {active_jobs} timer(s) ativo(s)", f"{len(jobs)} job(s), {active_jobs} active timer(s)"),
+        )
+        monitor_report = (monitor_data.get("report") or {}) if monitor_ok and isinstance(monitor_data, dict) else {}
+        monitor_status = (monitor_report.get("overall_status") or "").strip().lower()
+        summary.add_row(
+            self._txt("Monitor DR", "DR monitor"),
+            self._status_badge(monitor_ok),
+            monitor_status or self._txt("nao configurado", "not configured"),
+        )
+        summary.add_row(
+            self._txt("Runbooks DR", "DR runbooks"),
+            self._status_badge(bool(runbooks)),
+            self._txt(f"{len(runbooks)} runbook(s)", f"{len(runbooks)} runbook(s)"),
         )
         self.ui.console.print(Panel(summary, border_style="blue"))
 
@@ -621,6 +639,35 @@ class VPSToolsApp:
             self.ui.print_error(data)
         self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
 
+    def _dr_profile_assessment_flow(self):
+        profile_name = self._prompt_default("Identificador do perfil", "Profile identifier", "backend-prod")
+        job_name = self._prompt_default("Nome do job para comparar com o perfil", "Job name to compare with the profile", "")
+        ok, data = self.sys_actions.assess_dr_profile(profile_name, job_name)
+        if ok:
+            backup_state = data.get("backup_adherence", "-")
+            restore_state = data.get("restore_adherence", "-")
+            summary = (
+                f"[white]{self._txt('Perfil', 'Profile')}:[/white] [cyan]{data.get('profile_name', '-')}[/cyan]\n"
+                f"[white]{self._txt('Servico', 'Service')}:[/white] [cyan]{data.get('service_name', '-')}[/cyan]\n"
+                f"[white]{self._txt('Ambiente', 'Environment')}:[/white] [cyan]{data.get('environment_name', '-')}[/cyan]\n"
+                f"[white]RPO:[/white] [cyan]{data.get('rpo_target', '-')}[/cyan]\n"
+                f"[white]RTO:[/white] [cyan]{data.get('rto_target', '-')}[/cyan]\n"
+                f"[white]{self._txt('Job', 'Job')}:[/white] [cyan]{data.get('job_name', '-') or '-'}[/cyan]\n"
+                f"[white]{self._txt('Idade do ultimo backup', 'Last backup age')}:[/white] [cyan]{data.get('backup_age_human', '-')}[/cyan]\n"
+                f"[white]{self._txt('Duracao do ultimo backup', 'Last backup duration')}:[/white] [cyan]{data.get('backup_duration_seconds', '-')}[/cyan]\n"
+                f"[white]{self._txt('Duracao do ultimo restore', 'Last restore duration')}:[/white] [cyan]{data.get('restore_duration_seconds', '-')}[/cyan]\n"
+                f"[white]{self._txt('Aderencia do backup', 'Backup adherence')}:[/white] [cyan]{backup_state}[/cyan]\n"
+                f"[white]{self._txt('Aderencia do restore', 'Restore adherence')}:[/white] [cyan]{restore_state}[/cyan]\n"
+                f"[white]{self._txt('Aderencia geral', 'Overall adherence')}:[/white] [cyan]{data.get('overall_adherence', '-')}[/cyan]\n"
+                f"[white]{self._txt('Criticidade', 'Criticality')}:[/white] [cyan]{data.get('service_criticality', '-') or '-'}[/cyan]\n"
+                f"[white]{self._txt('Responsaveis', 'Operators')}:[/white] [cyan]{data.get('operators', '-') or '-'}[/cyan]\n"
+                f"[white]{self._txt('Aprovadores', 'Approvers')}:[/white] [cyan]{data.get('approvers', '-') or '-'}[/cyan]"
+            )
+            self.ui.console.print(Panel(summary, title=self._txt("ADERENCIA RPO/RTO", "RPO/RTO ADHERENCE"), border_style="green"))
+        else:
+            self.ui.print_error(data)
+        self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+
     def _dr_backup_job_flow(self):
         if not self._confirm("configuracao de job de backup logico"):
             return
@@ -763,6 +810,7 @@ class VPSToolsApp:
                 f"[white]{self._txt('Artefato secundario', 'Secondary artifact')}:[/white] [cyan]{last_status.get('offsite_artifact_path', '-')}[/cyan]\n"
                 f"[white]{self._txt('Status do alerta', 'Alert status')}:[/white] [cyan]{last_status.get('alert_status', '-')}[/cyan]\n"
                 f"[white]{self._txt('Status da criptografia', 'Encryption status')}:[/white] [cyan]{last_status.get('encryption_status', '-')}[/cyan]\n"
+                f"[white]{self._txt('Status do preflight', 'Preflight status')}:[/white] [cyan]{last_status.get('preflight_status', '-')}[/cyan]\n"
                 f"[white]{self._txt('Duracao', 'Duration')}:[/white] [cyan]{last_status.get('duration_seconds', '-')}[/cyan]\n"
                 f"[white]{self._txt('Mensagem', 'Message')}:[/white] [cyan]{last_status.get('message', '-')}[/cyan]\n\n"
                 f"[white]journalctl[/white]\n{data['logs'][-2500:]}"
@@ -794,6 +842,7 @@ class VPSToolsApp:
                 f"[white]{self._txt('Ultimo status do secundario', 'Last secondary status')}:[/white] [cyan]{last_status.get('offsite_status', '-')}[/cyan]\n"
                 f"[white]{self._txt('Ultimo status do alerta', 'Last alert status')}:[/white] [cyan]{last_status.get('alert_status', '-')}[/cyan]\n"
                 f"[white]{self._txt('Ultimo status da criptografia', 'Last encryption status')}:[/white] [cyan]{last_status.get('encryption_status', '-')}[/cyan]\n"
+                f"[white]{self._txt('Ultimo status do preflight', 'Last preflight status')}:[/white] [cyan]{last_status.get('preflight_status', '-')}[/cyan]\n"
                 f"[white]{self._txt('Ultimo restore test', 'Last restore test')}:[/white] [cyan]{last_restore_test.get('status', '-') or '-'}[/cyan]\n"
                 f"[white]{self._txt('Banco temporario do restore', 'Restore temporary database')}:[/white] [cyan]{last_restore_test.get('restore_db_name', '-') or '-'}[/cyan]\n"
                 f"[white]{self._txt('Duracao do restore', 'Restore duration')}:[/white] [cyan]{last_restore_test.get('duration_seconds', '-') or '-'}[/cyan]\n"
@@ -880,6 +929,263 @@ class VPSToolsApp:
                 f"[white]{self._txt('Server names', 'Server names')}:[/white] [cyan]{len(data['server_names'])}[/cyan]"
             )
             self.ui.console.print(Panel(summary, title=self._txt("EXPORT DE CONFIG CONCLUIDO", "CONFIG EXPORT COMPLETED"), border_style="green"))
+        else:
+            self.ui.print_error(data)
+        self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+
+    def _dr_monitor_config_flow(self):
+        if not self._confirm("configuracao do monitor DR"):
+            return
+        monitor_name = self._prompt_default("Nome do monitor", "Monitor name", "default")
+        on_calendar = self._prompt_default("Agenda systemd OnCalendar", "systemd OnCalendar schedule", "hourly")
+        services = self._prompt_csv_default(
+            "Servicos para monitorar separados por virgula",
+            "Services to monitor separated by commas",
+            "nginx,postgresql,celiora-backend",
+        )
+        domains = self._prompt_csv_default(
+            "Dominios para monitorar separados por virgula",
+            "Domains to monitor separated by commas",
+            "api.dinvendas.com",
+        )
+        backup_jobs = self._prompt_csv_default(
+            "Jobs de backup para monitorar separados por virgula",
+            "Backup jobs to monitor separated by commas",
+            "hospital-dr-stage4",
+        )
+        profile_name = self._prompt_default("Perfil DR para comparar", "DR profile to compare", "backend-prod")
+        check_offsite_job = self._prompt_default("Job usado para testar offsite", "Job used to test offsite", backup_jobs[0] if backup_jobs else "")
+        disk_path = self._prompt_default("Ponto de montagem do disco", "Disk mount/path", "/")
+        min_disk_mb = self._prompt_int_default("Disco minimo livre em MB", "Minimum free disk in MB", 1024)
+        min_ram_mb = self._prompt_int_default("RAM minima disponivel em MB", "Minimum available RAM in MB", 200)
+        max_cpu_percent = self._prompt_int_default("CPU maxima em percentual", "Maximum CPU percent", 90)
+        ssl_warn_days = self._prompt_int_default("Avisar SSL com quantos dias de antecedencia", "SSL warning days", 14)
+        alert_webhook_url = self._prompt_default("Webhook de alerta (vazio = desativado)", "Alert webhook (empty = disabled)", "")
+        alert_on_success = False
+        alert_on_failure = True
+        alert_timeout_sec = 10
+        if alert_webhook_url:
+            alert_on_success = self._prompt_bool_default("Enviar alerta em sucesso", "Send alert on success", False)
+            alert_on_failure = self._prompt_bool_default("Enviar alerta em falha/aviso", "Send alert on failure/warning", True)
+            alert_timeout_sec = self._prompt_int_default("Timeout do alerta em segundos", "Alert timeout in seconds", 10)
+
+        def worker(update):
+            return self.sys_actions.configure_dr_monitoring_job(
+                monitor_name=monitor_name,
+                on_calendar=on_calendar,
+                service_names=services,
+                domains=domains,
+                backup_jobs=backup_jobs,
+                profile_name=profile_name,
+                check_offsite_job=check_offsite_job,
+                disk_path=disk_path,
+                min_disk_mb=min_disk_mb,
+                min_ram_mb=min_ram_mb,
+                max_cpu_percent=max_cpu_percent,
+                ssl_warn_days=ssl_warn_days,
+                alert_webhook_url=alert_webhook_url,
+                alert_on_success=alert_on_success,
+                alert_on_failure=alert_on_failure,
+                alert_timeout_sec=alert_timeout_sec,
+                progress_callback=update,
+            )
+
+        ok, data = self.ui.run_animated_task(self._txt("Configurando monitor DR", "Configuring DR monitor"), worker)
+        if ok:
+            summary = (
+                f"[white]{self._txt('Monitor', 'Monitor')}:[/white] [cyan]{data.get('monitor_name', '-')}[/cyan]\n"
+                f"[white]OnCalendar:[/white] [cyan]{data.get('on_calendar', '-')}[/cyan]\n"
+                f"[white]{self._txt('Servicos', 'Services')}:[/white] [cyan]{', '.join(data.get('service_names', [])) or '-'}[/cyan]\n"
+                f"[white]{self._txt('Dominios', 'Domains')}:[/white] [cyan]{', '.join(data.get('domains', [])) or '-'}[/cyan]\n"
+                f"[white]{self._txt('Jobs', 'Jobs')}:[/white] [cyan]{', '.join(data.get('backup_jobs', [])) or '-'}[/cyan]\n"
+                f"[white]{self._txt('Perfil DR', 'DR profile')}:[/white] [cyan]{data.get('profile_name', '-') or '-'}[/cyan]\n"
+                f"[white]{self._txt('Job offsite', 'Offsite job')}:[/white] [cyan]{data.get('check_offsite_job', '-') or '-'}[/cyan]\n\n"
+                f"[white]systemctl status {data.get('timer_name', '-') }[/white]\n{data.get('timer_status', '')[-2000:]}"
+            )
+            self.ui.console.print(Panel(summary, title=self._txt("MONITOR DR CONFIGURADO", "DR MONITOR CONFIGURED"), border_style="green"))
+        else:
+            self.ui.print_error(data)
+        self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+
+    def _dr_monitor_run_now_flow(self):
+        if not self._confirm("execucao imediata do monitor DR"):
+            return
+        monitor_name = self._prompt_default("Nome do monitor", "Monitor name", "default")
+        ok, data = self.sys_actions.run_dr_monitor_job_now(monitor_name)
+        if ok:
+            report = data.get("report") or {}
+            summary = (
+                f"[white]{self._txt('Status geral', 'Overall status')}:[/white] [cyan]{report.get('overall_status', '-')}[/cyan]\n"
+                f"[white]{self._txt('Falhas', 'Failures')}:[/white] [cyan]{', '.join(report.get('failures', [])) or '-'}[/cyan]\n"
+                f"[white]{self._txt('Avisos', 'Warnings')}:[/white] [cyan]{', '.join(report.get('warnings', [])) or '-'}[/cyan]\n"
+                f"[white]{self._txt('Disco livre MB', 'Free disk MB')}:[/white] [cyan]{(report.get('disk') or {}).get('free_mb', '-')}[/cyan]\n"
+                f"[white]{self._txt('RAM disponivel MB', 'Available RAM MB')}:[/white] [cyan]{(report.get('ram') or {}).get('available_mb', '-')}[/cyan]\n"
+                f"[white]{self._txt('CPU percentual', 'CPU percent')}:[/white] [cyan]{(report.get('cpu') or {}).get('percent', '-')}[/cyan]\n"
+                f"[white]{self._txt('Offsite', 'Offsite')}:[/white] [cyan]{(report.get('offsite_result') or {}).get('status', '-')}[/cyan]\n\n"
+                f"[white]journalctl[/white]\n{data.get('logs', '')[-2500:]}"
+            )
+            self.ui.console.print(Panel(summary, title=self._txt("MONITOR DR EXECUTADO", "DR MONITOR EXECUTED"), border_style="green"))
+        else:
+            self.ui.print_error(data)
+        self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+
+    def _dr_monitor_status_flow(self):
+        monitor_name = self._prompt_default("Nome do monitor", "Monitor name", "default")
+        ok, data = self.sys_actions.dr_monitor_status(monitor_name)
+        if ok:
+            config = data.get("config") or {}
+            report = data.get("report") or {}
+            profile_assessment = report.get("profile_assessment") or {}
+            summary = (
+                f"[white]{self._txt('Monitor', 'Monitor')}:[/white] [cyan]{config.get('monitor_name', '-') or '-'}[/cyan]\n"
+                f"[white]OnCalendar:[/white] [cyan]{config.get('on_calendar', '-') or '-'}[/cyan]\n"
+                f"[white]{self._txt('Servicos', 'Services')}:[/white] [cyan]{', '.join(config.get('service_names', [])) or '-'}[/cyan]\n"
+                f"[white]{self._txt('Dominios', 'Domains')}:[/white] [cyan]{', '.join(config.get('domains', [])) or '-'}[/cyan]\n"
+                f"[white]{self._txt('Status geral', 'Overall status')}:[/white] [cyan]{report.get('overall_status', '-') or '-'}[/cyan]\n"
+                f"[white]{self._txt('Falhas', 'Failures')}:[/white] [cyan]{', '.join(report.get('failures', [])) or '-'}[/cyan]\n"
+                f"[white]{self._txt('Avisos', 'Warnings')}:[/white] [cyan]{', '.join(report.get('warnings', [])) or '-'}[/cyan]\n"
+                f"[white]{self._txt('Aderencia RPO/RTO', 'RPO/RTO adherence')}:[/white] [cyan]{profile_assessment.get('overall_adherence', '-') if isinstance(profile_assessment, dict) else '-'}[/cyan]\n\n"
+                f"[white]Timer[/white]\n{data.get('timer_status', '')[-1500:]}\n\n"
+                f"[white]Service[/white]\n{data.get('service_status', '')[-1500:]}"
+            )
+            self.ui.console.print(Panel(summary, title=self._txt("STATUS DO MONITOR DR", "DR MONITOR STATUS"), border_style="blue"))
+        else:
+            self.ui.print_error(data)
+        self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+
+    def _dr_runbook_save_flow(self):
+        if not self._confirm("salvamento de runbook DR"):
+            return
+        runbook_name = self._prompt_default("Nome tecnico do runbook", "Runbook technical name", "rotacionar-segredos")
+        title = self._prompt_default("Titulo do runbook", "Runbook title", "Rotacionar segredos sensiveis")
+        category = self._prompt_default("Categoria (semi/manual)", "Category (semi/manual)", "semi")
+        summary = self._prompt_default("Resumo", "Summary", "")
+        impact = self._prompt_default("Impacto estimado", "Estimated impact", "")
+        command = self._prompt_default("Comando unico (vazio = apenas guiado)", "Single command (empty = guided only)", "")
+        rollback_plan = self._prompt_default("Plano de rollback", "Rollback plan", "")
+        prechecks = self._prompt_csv_default("Checklist pre-execucao separado por virgula", "Pre-execution checklist separated by commas", "")
+        requires_double_confirmation = self._prompt_bool_default("Exigir dupla confirmacao", "Require double confirmation", True)
+        responsible = self._prompt_default("Responsavel principal", "Primary responsible", "")
+        notes = self._prompt_default("Observacoes", "Notes", "")
+        ok, data = self.sys_actions.save_dr_runbook(
+            runbook_name=runbook_name,
+            title=title,
+            category=category,
+            summary=summary,
+            impact=impact,
+            command=command,
+            rollback_plan=rollback_plan,
+            prechecks=prechecks,
+            requires_double_confirmation=requires_double_confirmation,
+            responsible=responsible,
+            notes=notes,
+        )
+        if ok:
+            summary = (
+                f"[white]{self._txt('Runbook', 'Runbook')}:[/white] [cyan]{data.get('runbook_name', '-')}[/cyan]\n"
+                f"[white]{self._txt('Categoria', 'Category')}:[/white] [cyan]{data.get('category', '-')}[/cyan]\n"
+                f"[white]{self._txt('Comando', 'Command')}:[/white] [cyan]{data.get('command', '-') or '-'}[/cyan]\n"
+                f"[white]{self._txt('Arquivo', 'File')}:[/white] [cyan]{data.get('runbook_file', '-')}[/cyan]"
+            )
+            self.ui.console.print(Panel(summary, title=self._txt("RUNBOOK SALVO", "RUNBOOK SAVED"), border_style="green"))
+        else:
+            self.ui.print_error(data)
+        self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+
+    def _dr_runbook_execute_flow(self):
+        runbooks = self.sys_actions.list_dr_runbooks()
+        if not runbooks:
+            self.ui.print_error(self._txt("Nenhum runbook DR disponivel.", "No DR runbook available."))
+            self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+            return
+        table = Table(title=self._txt("[bold cyan]RUNBOOKS DR[/bold cyan]", "[bold cyan]DR RUNBOOKS[/bold cyan]"), box=None, show_header=True, expand=True)
+        table.add_column(self._txt("Nome", "Name"), style="cyan", width=24)
+        table.add_column(self._txt("Categoria", "Category"), width=12)
+        table.add_column(self._txt("Titulo", "Title"))
+        for item in runbooks:
+            table.add_row(item.get("runbook_name", "-"), item.get("category", "-"), item.get("title", "-"))
+        self.ui.console.print(Panel(table, border_style="cyan"))
+        runbook_name = self._prompt_default("Nome tecnico do runbook", "Runbook technical name", runbooks[0].get("runbook_name", ""))
+        selected = next((item for item in runbooks if item.get("runbook_name") == runbook_name), None)
+        if not selected:
+            self.ui.print_error(self._txt("Runbook nao encontrado.", "Runbook not found."))
+            self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+            return
+        execute_command = self._prompt_bool_default("Executar o comando do runbook", "Execute the runbook command", False)
+        command_override = self._prompt_default("Comando unico (vazio = usar o salvo)", "Single command (empty = use saved)", "")
+        capture_evidence = self._prompt_bool_default("Capturar bundle de evidencias/logs", "Capture evidence/log bundle", selected.get("category") == "manual")
+        operator_name = self._prompt_default("Operador", "Operator", os.getenv("USER") or os.getenv("USERNAME") or "operator")
+        approver_name = self._prompt_default("Aprovador", "Approver", "")
+        if not self._confirm(f"execucao do runbook {runbook_name}", default_yes=False):
+            return
+        if selected.get("requires_double_confirmation"):
+            expected = runbook_name.upper()
+            typed = self.ui.prompt(self._txt(f"Digite {expected} para confirmar: ", f"Type {expected} to confirm: ")).strip().upper()
+            if typed != expected:
+                self.ui.print_error(self._txt("Dupla confirmacao nao atendida.", "Double confirmation failed."))
+                self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+                return
+        ok, data = self.sys_actions.execute_dr_runbook(
+            runbook_name=runbook_name,
+            operator_name=operator_name,
+            approver_name=approver_name,
+            execute_command=execute_command,
+            command_override=command_override,
+            capture_evidence=capture_evidence,
+        )
+        if ok:
+            command_result = data.get("command_result") or {}
+            summary = (
+                f"[white]{self._txt('Runbook', 'Runbook')}:[/white] [cyan]{data.get('runbook_name', '-')}[/cyan]\n"
+                f"[white]{self._txt('Categoria', 'Category')}:[/white] [cyan]{data.get('category', '-')}[/cyan]\n"
+                f"[white]{self._txt('Status', 'Status')}:[/white] [cyan]{data.get('status', '-')}[/cyan]\n"
+                f"[white]{self._txt('Operador', 'Operator')}:[/white] [cyan]{data.get('operator_name', '-') or '-'}[/cyan]\n"
+                f"[white]{self._txt('Aprovador', 'Approver')}:[/white] [cyan]{data.get('approver_name', '-') or '-'}[/cyan]\n"
+                f"[white]{self._txt('Impacto', 'Impact')}:[/white] [cyan]{data.get('impact', '-') or '-'}[/cyan]\n"
+                f"[white]{self._txt('Rollback', 'Rollback')}:[/white] [cyan]{data.get('rollback_plan', '-') or '-'}[/cyan]\n"
+                f"[white]{self._txt('Bundle de evidencias', 'Evidence bundle')}:[/white] [cyan]{(data.get('evidence_bundle') or {}).get('archive_path', '-') or '-'}[/cyan]\n"
+                f"[white]{self._txt('Log', 'Log')}:[/white] [cyan]{data.get('log_file', '-') or '-'}[/cyan]\n\n"
+                f"[white]{self._txt('Saida do comando', 'Command output')}:[/white]\n{command_result.get('output', '-')}"
+            )
+            self.ui.console.print(Panel(summary, title=self._txt("RUNBOOK EXECUTADO", "RUNBOOK EXECUTED"), border_style="green"))
+        else:
+            self.ui.print_error(data)
+        self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+
+    def _dr_exercise_flow(self):
+        if not self._confirm("registro de exercicio de desastre"):
+            return
+        exercise_name = self._prompt_default("Nome do exercicio", "Exercise name", "restore-completo")
+        scenario = self._prompt_default(
+            "Cenario",
+            "Scenario",
+            "restore completo",
+        )
+        mode = self._prompt_default("Modo (tabletop/safe)", "Mode (tabletop/safe)", "tabletop")
+        profile_name = self._prompt_default("Perfil DR para comparar", "DR profile to compare", "backend-prod")
+        job_name = self._prompt_default("Job de backup relacionado", "Related backup job", "hospital-dr-stage4")
+        duration_seconds = self._prompt_int_default("Duracao real em segundos", "Real duration in seconds", 60)
+        notes = self._prompt_default("Observacoes", "Notes", "")
+        ok, data = self.sys_actions.record_dr_exercise(
+            exercise_name=exercise_name,
+            scenario=scenario,
+            mode=mode,
+            profile_name=profile_name,
+            job_name=job_name,
+            notes=notes,
+            duration_seconds=duration_seconds,
+        )
+        if ok:
+            assessment = data.get("assessment") or {}
+            summary = (
+                f"[white]{self._txt('Exercicio', 'Exercise')}:[/white] [cyan]{data.get('exercise_name', '-')}[/cyan]\n"
+                f"[white]{self._txt('Cenario', 'Scenario')}:[/white] [cyan]{data.get('scenario', '-')}[/cyan]\n"
+                f"[white]{self._txt('Modo', 'Mode')}:[/white] [cyan]{data.get('mode', '-')}[/cyan]\n"
+                f"[white]{self._txt('Duracao', 'Duration')}:[/white] [cyan]{data.get('duration_seconds', '-')}[/cyan]\n"
+                f"[white]{self._txt('Aderencia geral', 'Overall adherence')}:[/white] [cyan]{assessment.get('overall_adherence', '-') if isinstance(assessment, dict) else '-'}[/cyan]\n"
+                f"[white]{self._txt('Arquivo', 'File')}:[/white] [cyan]{data.get('exercise_file', '-') or '-'}[/cyan]"
+            )
+            self.ui.console.print(Panel(summary, title=self._txt("EXERCICIO REGISTRADO", "EXERCISE RECORDED"), border_style="green"))
         else:
             self.ui.print_error(data)
         self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
@@ -1553,11 +1859,18 @@ class VPSToolsApp:
             self._dr_status_panel()
             options = {
                 "01": self._txt("DEFINIR PERFIL RPO / RTO", "DEFINE RPO / RTO PROFILE"),
-                "02": self._txt("CONFIGURAR BACKUP LOGICO DE BANCO", "CONFIGURE LOGICAL DATABASE BACKUP"),
-                "03": self._txt("EXECUTAR BACKUP AGORA", "RUN BACKUP NOW"),
-                "04": self._txt("STATUS DO BACKUP", "BACKUP STATUS"),
-                "05": self._txt("TESTE AUTOMATICO DE RESTORE", "AUTOMATIC RESTORE TEST"),
-                "06": self._txt("EXPORTAR CONFIGURACOES DA VPS", "EXPORT VPS CONFIGURATION"),
+                "02": self._txt("AVALIAR ADERENCIA RPO / RTO", "ASSESS RPO / RTO ADHERENCE"),
+                "03": self._txt("CONFIGURAR BACKUP LOGICO DE BANCO", "CONFIGURE LOGICAL DATABASE BACKUP"),
+                "04": self._txt("EXECUTAR BACKUP AGORA", "RUN BACKUP NOW"),
+                "05": self._txt("STATUS DO BACKUP", "BACKUP STATUS"),
+                "06": self._txt("TESTE AUTOMATICO DE RESTORE", "AUTOMATIC RESTORE TEST"),
+                "07": self._txt("EXPORTAR CONFIGURACOES DA VPS", "EXPORT VPS CONFIGURATION"),
+                "08": self._txt("CONFIGURAR MONITOR DR", "CONFIGURE DR MONITOR"),
+                "09": self._txt("EXECUTAR MONITOR DR AGORA", "RUN DR MONITOR NOW"),
+                "10": self._txt("STATUS DO MONITOR DR", "DR MONITOR STATUS"),
+                "11": self._txt("EXECUTAR RUNBOOK GUIADO", "EXECUTE GUIDED RUNBOOK"),
+                "12": self._txt("SALVAR RUNBOOK CUSTOMIZADO", "SAVE CUSTOM RUNBOOK"),
+                "13": self._txt("REGISTRAR EXERCICIO DE DESASTRE", "RECORD DISASTER EXERCISE"),
                 "00": self.lang.t("menu.back", "VOLTAR"),
             }
             self.ui.draw_menu(options, self._txt("RECUPERACAO / DR", "RECOVERY / DR"))
@@ -1566,15 +1879,29 @@ class VPSToolsApp:
             if option == "1":
                 self._dr_profile_flow()
             elif option == "2":
-                self._dr_backup_job_flow()
+                self._dr_profile_assessment_flow()
             elif option == "3":
-                self._dr_run_backup_now_flow()
+                self._dr_backup_job_flow()
             elif option == "4":
-                self._dr_backup_status_flow()
+                self._dr_run_backup_now_flow()
             elif option == "5":
-                self._dr_restore_test_flow()
+                self._dr_backup_status_flow()
             elif option == "6":
+                self._dr_restore_test_flow()
+            elif option == "7":
                 self._dr_export_config_flow()
+            elif option == "8":
+                self._dr_monitor_config_flow()
+            elif option == "9":
+                self._dr_monitor_run_now_flow()
+            elif option == "10":
+                self._dr_monitor_status_flow()
+            elif option == "11":
+                self._dr_runbook_execute_flow()
+            elif option == "12":
+                self._dr_runbook_save_flow()
+            elif option == "13":
+                self._dr_exercise_flow()
             elif option == "00":
                 break
             else:

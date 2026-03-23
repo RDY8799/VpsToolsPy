@@ -5,10 +5,12 @@ import secrets
 import shlex
 import shutil
 import socket
+import ssl
 import string
 import subprocess
 import tarfile
 import time
+import calendar
 
 import psutil
 import requests
@@ -580,6 +582,22 @@ class SystemActions:
         return os.path.join(SystemActions._dr_root_dir(), "jobs")
 
     @staticmethod
+    def _dr_monitoring_dir() -> str:
+        return os.path.join(SystemActions._dr_root_dir(), "monitoring")
+
+    @staticmethod
+    def _dr_runbooks_dir() -> str:
+        return os.path.join(SystemActions._dr_root_dir(), "runbooks")
+
+    @staticmethod
+    def _dr_operation_logs_dir() -> str:
+        return os.path.join(SystemActions._dr_root_dir(), "operations")
+
+    @staticmethod
+    def _dr_exercises_dir() -> str:
+        return os.path.join(SystemActions._dr_root_dir(), "exercises")
+
+    @staticmethod
     def _dr_backup_job_paths(job_name: str):
         safe_job = re.sub(r"[^A-Za-z0-9_-]", "-", job_name or "").strip("-")
         job_dir = os.path.join(SystemActions._dr_jobs_dir(), safe_job)
@@ -597,6 +615,155 @@ class SystemActions:
             "service_unit": f"/etc/systemd/system/vps-tools-db-backup-{safe_job}.service",
             "timer_unit": f"/etc/systemd/system/vps-tools-db-backup-{safe_job}.timer",
         }
+
+    @staticmethod
+    def _dr_monitor_paths(monitor_name: str = "default"):
+        safe_name = re.sub(r"[^A-Za-z0-9_-]", "-", monitor_name or "").strip("-") or "default"
+        monitor_dir = os.path.join(SystemActions._dr_monitoring_dir(), safe_name)
+        service_name = f"vps-tools-dr-monitor-{safe_name}"
+        return {
+            "safe_name": safe_name,
+            "monitor_dir": monitor_dir,
+            "config_file": os.path.join(monitor_dir, "monitor.json"),
+            "report_file": os.path.join(monitor_dir, "last_report.json"),
+            "script_file": os.path.join(monitor_dir, "run-monitor.sh"),
+            "service_name": service_name,
+            "timer_name": f"{service_name}.timer",
+            "service_unit": f"/etc/systemd/system/{service_name}.service",
+            "timer_unit": f"/etc/systemd/system/{service_name}.timer",
+        }
+
+    @staticmethod
+    def _repo_root_dir() -> str:
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+    @staticmethod
+    def _preferred_python_binary() -> str:
+        repo_dir = SystemActions._repo_root_dir()
+        candidates = [
+            os.path.join(repo_dir, ".venv", "bin", "python"),
+            os.path.join(repo_dir, "venv", "bin", "python"),
+            shutil.which("python3") or "",
+            shutil.which("python") or "",
+        ]
+        for candidate in candidates:
+            if candidate and os.path.exists(candidate):
+                return candidate
+        return "python3"
+
+    @staticmethod
+    def _parse_duration_to_seconds(value):
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return int(value)
+        text = str(value).strip().lower()
+        if not text:
+            return None
+        total = 0
+        matched = False
+        units = {
+            "s": 1,
+            "sec": 1,
+            "secs": 1,
+            "second": 1,
+            "seconds": 1,
+            "m": 60,
+            "min": 60,
+            "mins": 60,
+            "minute": 60,
+            "minutes": 60,
+            "h": 3600,
+            "hr": 3600,
+            "hour": 3600,
+            "hours": 3600,
+            "d": 86400,
+            "day": 86400,
+            "days": 86400,
+        }
+        normalized = (
+            text.replace("minutos", "minutes")
+            .replace("minuto", "minute")
+            .replace("horas", "hours")
+            .replace("hora", "hour")
+            .replace("segundos", "seconds")
+            .replace("segundo", "second")
+            .replace("dias", "days")
+            .replace("dia", "day")
+        )
+        for number, unit in re.findall(r"(\d+)\s*([a-z]+)", normalized):
+            factor = units.get(unit)
+            if factor:
+                matched = True
+                total += int(number) * factor
+        if matched:
+            return total
+        if text.isdigit():
+            return int(text)
+        return None
+
+    @staticmethod
+    def _format_duration_short(seconds):
+        if seconds is None:
+            return "-"
+        seconds = int(seconds)
+        if seconds < 60:
+            return f"{seconds}s"
+        if seconds < 3600:
+            minutes, rem = divmod(seconds, 60)
+            return f"{minutes}m {rem}s" if rem else f"{minutes}m"
+        hours, rem = divmod(seconds, 3600)
+        minutes = rem // 60
+        return f"{hours}h {minutes}m" if minutes else f"{hours}h"
+
+    @staticmethod
+    def _parse_iso_timestamp(value: str):
+        text = (value or "").strip()
+        if not text:
+            return None
+        for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d %H:%M:%S"):
+            try:
+                parsed = time.strptime(text, fmt)
+                if "T" in fmt:
+                    return int(calendar.timegm(parsed))
+                return int(time.mktime(parsed))
+            except Exception:
+                continue
+        return None
+
+    @staticmethod
+    def _append_jsonl_line(path: str, payload):
+        try:
+            parent = os.path.dirname(path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False)
+                f.write("\n")
+            return True, path
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def _dr_monitor_script_content(config_file: str, repo_dir: str, python_bin: str) -> str:
+        return (
+            "#!/usr/bin/env bash\n"
+            "set -Eeuo pipefail\n"
+            f"export PYTHONPATH={shlex.quote(repo_dir)}\n"
+            f"exec {shlex.quote(python_bin)} - {shlex.quote(config_file)} <<'PY'\n"
+            "import json\n"
+            "import sys\n"
+            "from vps_tools.core.system import SystemActions\n"
+            "ok, data = SystemActions.run_dr_monitoring_check(config_path=sys.argv[1])\n"
+            "if not ok:\n"
+            "    if isinstance(data, dict):\n"
+            "        print(data.get('message', 'monitoring failed'))\n"
+            "    else:\n"
+            "        print(data)\n"
+            "    raise SystemExit(1)\n"
+            "print(json.dumps(data, ensure_ascii=False))\n"
+            "PY\n"
+        )
 
     @staticmethod
     def _db_backup_script_content(job_name: str, engine: str, output_extension: str, compression_enabled: bool) -> str:
@@ -654,10 +821,12 @@ class SystemActions:
             'alert_message=""\n'
             'encryption_status="disabled"\n'
             'encryption_message=""\n'
+            'preflight_status="disabled"\n'
+            'preflight_message=""\n'
             'raw_backup=""\n'
             "\n"
             "write_status() {\n"
-            '  python3 - "$STATUS_FILE" "$JOB_NAME" "$ENGINE" "$status" "$artifact_path" "$checksum_path" "$finished_at" "$duration_seconds" "$message" "$offsite_artifact_path" "$offsite_checksum_path" "$offsite_status" "$offsite_message" "$alert_status" "$alert_message" "$encryption_status" "$encryption_message" "$ENCRYPTION_MODE" "$ENCRYPTION_CIPHER" <<\'PY\'\n'
+            '  python3 - "$STATUS_FILE" "$JOB_NAME" "$ENGINE" "$status" "$artifact_path" "$checksum_path" "$finished_at" "$duration_seconds" "$message" "$offsite_artifact_path" "$offsite_checksum_path" "$offsite_status" "$offsite_message" "$alert_status" "$alert_message" "$encryption_status" "$encryption_message" "$ENCRYPTION_MODE" "$ENCRYPTION_CIPHER" "$preflight_status" "$preflight_message" <<\'PY\'\n'
             "import json, sys\n"
             "(\n"
             "    path,\n"
@@ -679,6 +848,8 @@ class SystemActions:
             "    encryption_message,\n"
             "    encryption_mode,\n"
             "    encryption_cipher,\n"
+            "    preflight_status,\n"
+            "    preflight_message,\n"
             ") = sys.argv[1:]\n"
             "payload = {\n"
             '    "job_name": job,\n'
@@ -699,6 +870,8 @@ class SystemActions:
             '    "encryption_message": encryption_message,\n'
             '    "encryption_mode": encryption_mode,\n'
             '    "encryption_cipher": encryption_cipher,\n'
+            '    "preflight_status": preflight_status,\n'
+            '    "preflight_message": preflight_message,\n'
             "}\n"
             "with open(path, 'w', encoding='utf-8') as f:\n"
             "    json.dump(payload, f, ensure_ascii=False, indent=2)\n"
@@ -862,6 +1035,70 @@ class SystemActions:
             "  esac\n"
             "}\n"
             "\n"
+            "run_preflight_checks() {\n"
+            '  case "$ENGINE" in\n'
+            "    postgresql)\n"
+            '      if ! command -v pg_isready >/dev/null 2>&1; then\n'
+            '        preflight_status="failed"\n'
+            '        preflight_message="pg_isready not found"\n'
+            "        return 1\n"
+            "      fi\n"
+            '      export PGHOST="$DB_HOST"\n'
+            '      export PGPORT="$DB_PORT"\n'
+            '      export PGUSER="$DB_USER"\n'
+            '      export PGPASSWORD="$DB_PASSWORD"\n'
+            '      if ! pg_isready -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" >/dev/null 2>&1; then\n'
+            '        preflight_status="failed"\n'
+            '        preflight_message="postgresql preflight ping failed"\n'
+            "        return 1\n"
+            "      fi\n"
+            '      if ! psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT 1" >/dev/null 2>&1; then\n'
+            '        preflight_status="failed"\n'
+            '        preflight_message="postgresql preflight query failed"\n'
+            "        return 1\n"
+            "      fi\n"
+            "      ;;\n"
+            "    mysql|mariadb)\n"
+            '      export MYSQL_PWD="$DB_PASSWORD"\n'
+            '      if command -v mysqladmin >/dev/null 2>&1; then\n'
+            '        if ! mysqladmin --host="$DB_HOST" --port="$DB_PORT" --user="$DB_USER" ping >/dev/null 2>&1; then\n'
+            '          preflight_status="failed"\n'
+            '          preflight_message="mysql preflight ping failed"\n'
+            "          return 1\n"
+            "        fi\n"
+            "      fi\n"
+            '      if command -v mysqlcheck >/dev/null 2>&1; then\n'
+            '        if ! mysqlcheck --check --host="$DB_HOST" --port="$DB_PORT" --user="$DB_USER" "$DB_NAME" >/dev/null 2>&1; then\n'
+            '          preflight_status="failed"\n'
+            '          preflight_message="mysqlcheck validation failed"\n'
+            "          return 1\n"
+            "        fi\n"
+            '      elif ! mysql --host="$DB_HOST" --port="$DB_PORT" --user="$DB_USER" --database="$DB_NAME" -e "SELECT 1" >/dev/null 2>&1; then\n'
+            '        preflight_status="failed"\n'
+            '        preflight_message="mysql fallback validation failed"\n'
+            "        return 1\n"
+            "      fi\n"
+            "      ;;\n"
+            "    mongodb)\n"
+            '      if command -v mongosh >/dev/null 2>&1; then\n'
+            '        MONGO_PREFLIGHT=(--host "$DB_HOST" --port "$DB_PORT" --quiet)\n'
+            '        if [ -n "$DB_USER" ]; then MONGO_PREFLIGHT+=(--username "$DB_USER"); fi\n'
+            '        if [ -n "$DB_PASSWORD" ]; then MONGO_PREFLIGHT+=(--password "$DB_PASSWORD"); fi\n'
+            '        if [ -n "$AUTH_DB" ]; then MONGO_PREFLIGHT+=(--authenticationDatabase "$AUTH_DB"); fi\n'
+            '        if ! mongosh "${MONGO_PREFLIGHT[@]}" --eval "db.adminCommand({ ping: 1 }).ok" >/dev/null 2>&1; then\n'
+            '          preflight_status="failed"\n'
+            '          preflight_message="mongodb preflight ping failed"\n'
+            "          return 1\n"
+            "        fi\n"
+            "      fi\n"
+            "      ;;\n"
+            "    *)\n"
+            "      ;;\n"
+            "  esac\n"
+            '  preflight_status="success"\n'
+            '  preflight_message="source validation completed successfully"\n'
+            "}\n"
+            "\n"
             "finish_failure() {\n"
             '  rc="${1:-1}"\n'
             '  duration_seconds="$(( $(date +%s) - start_epoch ))"\n'
@@ -884,6 +1121,8 @@ class SystemActions:
             '  message="insufficient free space in backup directory"\n'
             "  finish_failure 1\n"
             "fi\n"
+            "\n"
+            "run_preflight_checks\n"
             "\n"
             'tmp_dir="$BACKUP_DIR/.tmp-${JOB_NAME}-${timestamp}"\n'
             'mkdir -p "$tmp_dir"\n'
@@ -943,7 +1182,8 @@ class SystemActions:
             "\n"
             'artifact_path="$BACKUP_DIR/${JOB_NAME}_${timestamp}${OUTPUT_EXTENSION}"\n'
             'encrypt_backup "$raw_backup"\n'
-            'sha256sum "$artifact_path" > "$artifact_path.sha256"\n'
+            'checksum_value="$(sha256sum "$artifact_path" | awk \'{print $1}\')"\n'
+            'printf "%s  %s\\n" "$checksum_value" "$(basename "$artifact_path")" > "$artifact_path.sha256"\n'
             'checksum_path="$artifact_path.sha256"\n'
             'apply_retention "$BACKUP_DIR"\n'
             'copy_offsite\n'
@@ -1588,6 +1828,133 @@ class SystemActions:
             return profiles
 
     @staticmethod
+    def get_dr_profile(profile_name: str):
+        safe_name = re.sub(r"[^A-Za-z0-9_.@-]", "-", profile_name or "").strip("-")
+        if not safe_name:
+            return False, SystemActions._txt("Perfil de DR invalido.", "Invalid DR profile.")
+        profile_file = os.path.join(SystemActions._dr_profiles_dir(), f"{safe_name}.json")
+        if not os.path.exists(profile_file):
+            return False, SystemActions._txt(
+                f"Perfil de DR nao encontrado: {profile_name}",
+                f"DR profile not found: {profile_name}",
+            )
+        payload = SystemActions._read_json_file(profile_file, default={}) or {}
+        if not isinstance(payload, dict) or not payload:
+            return False, SystemActions._txt(
+                f"Perfil de DR invalido: {profile_name}",
+                f"Invalid DR profile: {profile_name}",
+            )
+        payload["profile_file"] = profile_file
+        return True, payload
+
+    @staticmethod
+    def assess_dr_profile(profile_name: str, job_name: str = ""):
+        try:
+            ok, profile = SystemActions.get_dr_profile(profile_name)
+            if not ok:
+                return False, profile
+            jobs = SystemActions.list_db_backup_jobs()
+            selected_job = None
+            if job_name.strip():
+                safe_job = re.sub(r"[^A-Za-z0-9_-]", "-", job_name or "").strip("-")
+                selected_job = next((job for job in jobs if (job.get("job_name") or "") == safe_job), None)
+                if not selected_job:
+                    return False, SystemActions._txt(
+                        f"Job de backup nao encontrado: {job_name}",
+                        f"Backup job not found: {job_name}",
+                    )
+            elif jobs:
+                selected_job = jobs[0]
+
+            rpo_seconds = SystemActions._parse_duration_to_seconds(profile.get("rpo_target"))
+            rto_seconds = SystemActions._parse_duration_to_seconds(profile.get("rto_target"))
+            max_downtime_seconds = SystemActions._parse_duration_to_seconds(profile.get("max_downtime"))
+            now_epoch = int(time.time())
+
+            assessment = {
+                "profile_name": profile.get("profile_name"),
+                "service_name": profile.get("service_name"),
+                "environment_name": profile.get("environment_name"),
+                "rpo_target": profile.get("rpo_target"),
+                "rpo_target_seconds": rpo_seconds,
+                "rto_target": profile.get("rto_target"),
+                "rto_target_seconds": rto_seconds,
+                "max_downtime": profile.get("max_downtime"),
+                "max_downtime_seconds": max_downtime_seconds,
+                "job_name": selected_job.get("job_name") if selected_job else "",
+                "backup_adherence": "unknown",
+                "restore_adherence": "unknown",
+                "overall_adherence": "unknown",
+                "backup_age_seconds": None,
+                "backup_age_human": "-",
+                "backup_duration_seconds": None,
+                "restore_duration_seconds": None,
+                "last_backup_finished_at": "",
+                "last_restore_finished_at": "",
+                "incident_rpo": profile.get("incident_rpo", ""),
+                "recovery_priority": profile.get("recovery_priority", ""),
+                "service_criticality": profile.get("service_criticality", ""),
+                "operators": profile.get("operators", ""),
+                "approvers": profile.get("approvers", ""),
+            }
+
+            if selected_job:
+                last_status = selected_job.get("last_status") or {}
+                last_restore = selected_job.get("last_restore_test") or {}
+                backup_finished_at = (last_status.get("finished_at") or "").strip()
+                backup_finished_epoch = SystemActions._parse_iso_timestamp(backup_finished_at)
+                backup_duration = last_status.get("duration_seconds")
+                if isinstance(backup_duration, str) and backup_duration.isdigit():
+                    backup_duration = int(backup_duration)
+                restore_duration = last_restore.get("duration_seconds")
+                if isinstance(restore_duration, str) and restore_duration.isdigit():
+                    restore_duration = int(restore_duration)
+
+                assessment["last_backup_finished_at"] = backup_finished_at
+                assessment["last_restore_finished_at"] = (last_restore.get("finished_at") or "").strip()
+                assessment["backup_duration_seconds"] = backup_duration
+                assessment["restore_duration_seconds"] = restore_duration
+
+                if backup_finished_epoch:
+                    backup_age = max(0, now_epoch - backup_finished_epoch)
+                    assessment["backup_age_seconds"] = backup_age
+                    assessment["backup_age_human"] = SystemActions._format_duration_short(backup_age)
+
+                backup_success = (last_status.get("status") or "") == "success"
+                restore_success = (last_restore.get("status") or "") == "success"
+                if rpo_seconds and backup_success and assessment["backup_age_seconds"] is not None:
+                    assessment["backup_adherence"] = "met" if assessment["backup_age_seconds"] <= rpo_seconds else "breached"
+                elif not rpo_seconds:
+                    assessment["backup_adherence"] = "not-configured"
+                else:
+                    assessment["backup_adherence"] = "unknown"
+
+                if rto_seconds and restore_success and isinstance(restore_duration, int):
+                    assessment["restore_adherence"] = "met" if restore_duration <= rto_seconds else "breached"
+                elif not rto_seconds:
+                    assessment["restore_adherence"] = "not-configured"
+                else:
+                    assessment["restore_adherence"] = "unknown"
+
+                if max_downtime_seconds and isinstance(restore_duration, int):
+                    assessment["downtime_adherence"] = "met" if restore_duration <= max_downtime_seconds else "breached"
+                else:
+                    assessment["downtime_adherence"] = "not-configured" if not max_downtime_seconds else "unknown"
+
+            statuses = {assessment["backup_adherence"], assessment["restore_adherence"], assessment.get("downtime_adherence")}
+            if "breached" in statuses:
+                assessment["overall_adherence"] = "breached"
+            elif {"met", "not-configured", "unknown"} & statuses:
+                if assessment["backup_adherence"] == "met" and assessment["restore_adherence"] in {"met", "not-configured"}:
+                    assessment["overall_adherence"] = "met"
+                else:
+                    assessment["overall_adherence"] = "partial"
+
+            return True, assessment
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
     def configure_db_backup_job(
         job_name: str,
         engine: str,
@@ -1936,6 +2303,787 @@ class SystemActions:
                 "last_status": last_status if isinstance(last_status, dict) else {},
                 "last_restore_test": last_restore_test if isinstance(last_restore_test, dict) else {},
             }
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def configure_dr_monitoring_job(
+        monitor_name: str,
+        on_calendar: str,
+        service_names,
+        domains,
+        backup_jobs,
+        profile_name: str = "",
+        check_offsite_job: str = "",
+        disk_path: str = "/",
+        min_disk_mb: int = 1024,
+        min_ram_mb: int = 256,
+        max_cpu_percent: int = 90,
+        ssl_warn_days: int = 14,
+        alert_webhook_url: str = "",
+        alert_on_success: bool = False,
+        alert_on_failure: bool = True,
+        alert_timeout_sec: int = 10,
+        progress_callback=None,
+    ):
+        def update(percent: int, text: str):
+            if progress_callback:
+                progress_callback(completed=percent, description=f"[cyan]{text}[/cyan]")
+
+        try:
+            if os.name == "nt":
+                return False, SystemActions._txt(
+                    "Monitoramento DR nao suportado no Windows.",
+                    "DR monitoring is not supported on Windows.",
+                )
+            ok, msg = SystemActions._validate_service_name(monitor_name)
+            if not ok:
+                return False, msg
+            if not on_calendar.strip():
+                return False, SystemActions._txt("Agenda OnCalendar nao pode ser vazia.", "OnCalendar schedule cannot be empty.")
+            if not disk_path.startswith("/"):
+                return False, SystemActions._txt("Caminho de disco deve ser absoluto.", "Disk path must be absolute.")
+
+            clean_services = [item.strip() for item in (service_names or []) if str(item).strip()]
+            clean_domains = [item.strip() for item in (domains or []) if str(item).strip()]
+            clean_jobs = [re.sub(r"[^A-Za-z0-9_-]", "-", item or "").strip("-") for item in (backup_jobs or []) if str(item).strip()]
+            safe_profile_name = re.sub(r"[^A-Za-z0-9_.@-]", "-", profile_name or "").strip("-")
+            safe_offsite_job = re.sub(r"[^A-Za-z0-9_-]", "-", check_offsite_job or "").strip("-")
+
+            paths = SystemActions._dr_monitor_paths(monitor_name)
+            os.makedirs(paths["monitor_dir"], exist_ok=True)
+
+            config_payload = {
+                "monitor_name": paths["safe_name"],
+                "on_calendar": on_calendar.strip(),
+                "service_names": clean_services,
+                "domains": clean_domains,
+                "backup_jobs": clean_jobs,
+                "profile_name": safe_profile_name,
+                "check_offsite_job": safe_offsite_job,
+                "disk_path": disk_path,
+                "min_disk_mb": int(min_disk_mb),
+                "min_ram_mb": int(min_ram_mb),
+                "max_cpu_percent": int(max_cpu_percent),
+                "ssl_warn_days": int(ssl_warn_days),
+                "alert_webhook_url": alert_webhook_url.strip(),
+                "alert_on_success": bool(alert_on_success),
+                "alert_on_failure": bool(alert_on_failure),
+                "alert_timeout_sec": int(alert_timeout_sec),
+                "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+
+            update(20, SystemActions._txt("Gravando configuracao do monitor DR", "Writing DR monitor configuration"))
+            ok, msg = SystemActions._write_json_file(paths["config_file"], config_payload, mode=0o600)
+            if not ok:
+                return False, msg
+
+            update(45, SystemActions._txt("Gravando runner do monitor DR", "Writing DR monitor runner"))
+            script_content = SystemActions._dr_monitor_script_content(
+                config_file=paths["config_file"],
+                repo_dir=SystemActions._repo_root_dir(),
+                python_bin=SystemActions._preferred_python_binary(),
+            )
+            ok, msg = SystemActions._write_text_file(paths["script_file"], script_content, mode=0o750)
+            if not ok:
+                return False, msg
+
+            service_content = (
+                "[Unit]\n"
+                f"Description=VPS Tools DR monitor {paths['safe_name']}\n"
+                "After=network.target\n"
+                "\n"
+                "[Service]\n"
+                "Type=oneshot\n"
+                f"ExecStart={paths['script_file']}\n"
+                f"WorkingDirectory={paths['monitor_dir']}\n"
+                "User=root\n"
+                "Group=root\n"
+                "\n"
+            )
+            timer_content = (
+                "[Unit]\n"
+                f"Description=Schedule VPS Tools DR monitor {paths['safe_name']}\n"
+                "\n"
+                "[Timer]\n"
+                f"OnCalendar={on_calendar.strip()}\n"
+                "Persistent=true\n"
+                "RandomizedDelaySec=120\n"
+                f"Unit={paths['service_name']}.service\n"
+                "\n"
+                "[Install]\n"
+                "WantedBy=timers.target\n"
+                "\n"
+            )
+
+            update(65, SystemActions._txt("Gravando unit files do monitor", "Writing monitor unit files"))
+            ok, msg = SystemActions._write_text_file(paths["service_unit"], service_content)
+            if not ok:
+                return False, msg
+            ok, msg = SystemActions._write_text_file(paths["timer_unit"], timer_content)
+            if not ok:
+                return False, msg
+
+            update(85, SystemActions._txt("Habilitando timer do monitor", "Enabling monitor timer"))
+            for cmd in (
+                ["systemctl", "daemon-reload"],
+                ["systemctl", "enable", "--now", paths["timer_name"]],
+            ):
+                result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                if result.returncode != 0:
+                    return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                        f"Falha ao executar: {' '.join(cmd)}",
+                        f"Failed to execute: {' '.join(cmd)}",
+                    )
+
+            timer_status = subprocess.run(["systemctl", "status", paths["timer_name"], "--no-pager"], capture_output=True, text=True, check=False)
+            update(100, SystemActions._txt("Monitor DR configurado", "DR monitor configured"))
+            config_payload["timer_name"] = paths["timer_name"]
+            config_payload["service_name"] = paths["service_name"]
+            config_payload["timer_status"] = (timer_status.stdout or timer_status.stderr or "").strip()
+            return True, config_payload
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def run_dr_monitoring_check(config_path: str = "", monitor_name: str = ""):
+        try:
+            if os.name == "nt":
+                return False, SystemActions._txt(
+                    "Monitoramento DR nao suportado no Windows.",
+                    "DR monitoring is not supported on Windows.",
+                )
+            if config_path:
+                config = SystemActions._read_json_file(config_path, default={}) or {}
+                paths = SystemActions._dr_monitor_paths((config.get("monitor_name") or monitor_name or "default"))
+            else:
+                paths = SystemActions._dr_monitor_paths(monitor_name or "default")
+                config = SystemActions._read_json_file(paths["config_file"], default={}) or {}
+            if not isinstance(config, dict) or not config:
+                return False, SystemActions._txt("Configuracao do monitor DR nao encontrada.", "DR monitor configuration not found.")
+
+            service_results = []
+            service_failures = []
+            for name in config.get("service_names") or []:
+                result = subprocess.run(["systemctl", "is-active", name], capture_output=True, text=True, check=False)
+                state = (result.stdout or result.stderr or "").strip() or "unknown"
+                service_results.append({"service": name, "status": state})
+                if state != "active":
+                    service_failures.append(name)
+
+            domain_results = []
+            domain_failures = []
+            for domain in config.get("domains") or []:
+                try:
+                    answers = socket.getaddrinfo(domain, None, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM)
+                    ips = sorted({item[4][0] for item in answers if item and item[4]})
+                except Exception:
+                    ips = []
+                domain_results.append({"domain": domain, "resolved_ips": ips})
+                if not ips:
+                    domain_failures.append(domain)
+
+            ssl_results = []
+            ssl_warnings = []
+            warn_seconds = int(config.get("ssl_warn_days") or 14) * 86400
+            for domain in config.get("domains") or []:
+                cert_path = os.path.join("/etc/letsencrypt/live", domain, "fullchain.pem")
+                entry = {"domain": domain, "status": "missing", "days_remaining": None, "cert_path": cert_path}
+                if os.path.exists(cert_path):
+                    try:
+                        decoded = ssl._ssl._test_decode_cert(cert_path)
+                        not_after = decoded.get("notAfter", "")
+                        expires_epoch = calendar.timegm(time.strptime(not_after, "%b %d %H:%M:%S %Y %Z"))
+                        remaining = max(0, int(expires_epoch - time.time()))
+                        entry["days_remaining"] = remaining // 86400
+                        entry["status"] = "warning" if remaining <= warn_seconds else "healthy"
+                        if entry["status"] == "warning":
+                            ssl_warnings.append(domain)
+                    except Exception:
+                        entry["status"] = "failed"
+                        ssl_warnings.append(domain)
+                else:
+                    ssl_warnings.append(domain)
+                ssl_results.append(entry)
+
+            disk_path = config.get("disk_path") or "/"
+            disk_usage = shutil.disk_usage(disk_path)
+            disk_free_mb = int(disk_usage.free // (1024 * 1024))
+            disk_ok = disk_free_mb >= int(config.get("min_disk_mb") or 1024)
+
+            ram = psutil.virtual_memory()
+            ram_available_mb = int(ram.available // (1024 * 1024))
+            ram_ok = ram_available_mb >= int(config.get("min_ram_mb") or 256)
+
+            cpu_percent = psutil.cpu_percent(interval=1)
+            cpu_ok = float(cpu_percent) <= float(config.get("max_cpu_percent") or 90)
+
+            backup_results = []
+            backup_failures = []
+            for job_name in config.get("backup_jobs") or []:
+                paths_job = SystemActions._dr_backup_job_paths(job_name)
+                last_status = SystemActions._read_json_file(paths_job["status_file"], default={}) or {}
+                last_restore = SystemActions._read_json_file(paths_job["restore_status_file"], default={}) or {}
+                job_status = (last_status.get("status") or "not-run").strip()
+                restore_status = (last_restore.get("status") or "not-tested").strip()
+                backup_results.append(
+                    {
+                        "job_name": job_name,
+                        "last_status": job_status,
+                        "last_finished_at": last_status.get("finished_at", ""),
+                        "last_restore_status": restore_status,
+                        "offsite_status": last_status.get("offsite_status", ""),
+                    }
+                )
+                if job_status != "success":
+                    backup_failures.append(job_name)
+
+            offsite_result = {"job_name": config.get("check_offsite_job") or "", "status": "disabled", "message": "offsite check not configured"}
+            check_offsite_job = (config.get("check_offsite_job") or "").strip()
+            if check_offsite_job:
+                job_paths = SystemActions._dr_backup_job_paths(check_offsite_job)
+                job_config = SystemActions._read_json_file(job_paths["config_file"], default={}) or {}
+                mode = (job_config.get("offsite_mode") or "none").strip().lower()
+                offsite_result["mode"] = mode
+                if mode == "local_copy":
+                    target_dir = (job_config.get("offsite_path") or "").strip()
+                    probe_path = os.path.join(target_dir, f".dr-write-test-{int(time.time())}")
+                    try:
+                        os.makedirs(target_dir, exist_ok=True)
+                        with open(probe_path, "w", encoding="utf-8") as f:
+                            f.write("ok\n")
+                        os.remove(probe_path)
+                        offsite_result.update({"status": "success", "message": "secondary local destination is writable", "path": target_dir})
+                    except Exception as exc:
+                        offsite_result.update({"status": "failed", "message": str(exc), "path": target_dir})
+                elif mode == "scp":
+                    ssh_cmd = [
+                        "ssh",
+                        "-p",
+                        str(job_config.get("offsite_port") or 22),
+                        "-o",
+                        "BatchMode=yes",
+                        "-o",
+                        f"ConnectTimeout={int(job_config.get('offsite_timeout_sec') or 30)}",
+                    ]
+                    if job_config.get("offsite_ssh_key"):
+                        ssh_cmd.extend(["-i", job_config["offsite_ssh_key"]])
+                    if job_config.get("offsite_known_hosts"):
+                        ssh_cmd.extend(["-o", f"UserKnownHostsFile={job_config['offsite_known_hosts']}", "-o", "StrictHostKeyChecking=yes"])
+                    else:
+                        ssh_cmd.extend(["-o", "StrictHostKeyChecking=accept-new"])
+                    ssh_cmd.append(f"{job_config.get('offsite_user')}@{job_config.get('offsite_host')}")
+                    ssh_cmd.append("true")
+                    result = subprocess.run(ssh_cmd, capture_output=True, text=True, check=False)
+                    if result.returncode == 0:
+                        offsite_result.update({"status": "success", "message": "scp destination is reachable"})
+                    else:
+                        offsite_result.update({"status": "failed", "message": (result.stderr or result.stdout or "").strip() or "scp connectivity failed"})
+                else:
+                    offsite_result.update({"status": "disabled", "message": "selected backup job has no offsite destination"})
+
+            profile_assessment = {}
+            profile_name = (config.get("profile_name") or "").strip()
+            if profile_name:
+                primary_job = (config.get("backup_jobs") or [""])[0]
+                ok, assessment = SystemActions.assess_dr_profile(profile_name, primary_job)
+                if ok:
+                    profile_assessment = assessment
+                else:
+                    profile_assessment = {"status": "failed", "message": assessment}
+
+            overall_status = "healthy"
+            failures = []
+            warnings = []
+            if service_failures:
+                failures.append(SystemActions._txt("servicos inativos", "inactive services"))
+            if domain_failures:
+                failures.append(SystemActions._txt("dominios sem resolucao DNS", "domains without DNS resolution"))
+            if not disk_ok:
+                failures.append(SystemActions._txt("disco abaixo do minimo", "disk below threshold"))
+            if not ram_ok:
+                failures.append(SystemActions._txt("RAM abaixo do minimo", "RAM below threshold"))
+            if not cpu_ok:
+                warnings.append(SystemActions._txt("CPU acima do limite", "CPU above threshold"))
+            if backup_failures:
+                failures.append(SystemActions._txt("job(s) de backup com falha", "backup job(s) failed"))
+            if offsite_result.get("status") == "failed":
+                failures.append(SystemActions._txt("conectividade offsite com falha", "offsite connectivity failed"))
+            if ssl_warnings:
+                warnings.append(SystemActions._txt("SSL ausente/proximo do vencimento", "SSL missing/near expiry"))
+            if profile_assessment and profile_assessment.get("overall_adherence") == "breached":
+                failures.append(SystemActions._txt("RPO/RTO violado", "RPO/RTO breached"))
+            elif profile_assessment and profile_assessment.get("overall_adherence") == "partial":
+                warnings.append(SystemActions._txt("aderencia parcial ao RPO/RTO", "partial RPO/RTO adherence"))
+
+            if failures:
+                overall_status = "failed"
+            elif warnings:
+                overall_status = "warning"
+
+            report = {
+                "monitor_name": config.get("monitor_name") or paths["safe_name"],
+                "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "overall_status": overall_status,
+                "service_results": service_results,
+                "domain_results": domain_results,
+                "ssl_results": ssl_results,
+                "disk": {
+                    "path": disk_path,
+                    "free_mb": disk_free_mb,
+                    "min_free_mb": int(config.get("min_disk_mb") or 1024),
+                    "status": "healthy" if disk_ok else "failed",
+                },
+                "ram": {
+                    "available_mb": ram_available_mb,
+                    "min_available_mb": int(config.get("min_ram_mb") or 256),
+                    "status": "healthy" if ram_ok else "failed",
+                },
+                "cpu": {
+                    "percent": cpu_percent,
+                    "max_percent": float(config.get("max_cpu_percent") or 90),
+                    "status": "healthy" if cpu_ok else "warning",
+                },
+                "backup_results": backup_results,
+                "offsite_result": offsite_result,
+                "profile_assessment": profile_assessment,
+                "failures": failures,
+                "warnings": warnings,
+            }
+            SystemActions._write_json_file(paths["report_file"], report, mode=0o600)
+
+            webhook = (config.get("alert_webhook_url") or "").strip()
+            should_alert = False
+            if webhook and overall_status == "failed" and config.get("alert_on_failure", True):
+                should_alert = True
+            if webhook and overall_status == "healthy" and config.get("alert_on_success"):
+                should_alert = True
+            if webhook and overall_status == "warning" and config.get("alert_on_failure", True):
+                should_alert = True
+            if should_alert:
+                try:
+                    requests.post(webhook, json=report, timeout=int(config.get("alert_timeout_sec") or 10))
+                    report["alert_status"] = "sent"
+                except Exception as exc:
+                    report["alert_status"] = "failed"
+                    report["alert_message"] = str(exc)
+                    SystemActions._write_json_file(paths["report_file"], report, mode=0o600)
+            else:
+                report["alert_status"] = "disabled"
+            return True, report
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def run_dr_monitor_job_now(monitor_name: str = "default"):
+        try:
+            paths = SystemActions._dr_monitor_paths(monitor_name)
+            if not os.path.exists(paths["config_file"]):
+                return False, SystemActions._txt(
+                    f"Monitor DR nao encontrado: {monitor_name}",
+                    f"DR monitor not found: {monitor_name}",
+                )
+            result = subprocess.run(["systemctl", "start", f"{paths['service_name']}.service"], capture_output=True, text=True, check=False)
+            service_status = subprocess.run(["systemctl", "status", f"{paths['service_name']}.service", "--no-pager"], capture_output=True, text=True, check=False)
+            logs = subprocess.run(["journalctl", "-u", f"{paths['service_name']}.service", "-n", "80", "--no-pager"], capture_output=True, text=True, check=False)
+            report = SystemActions._read_json_file(paths["report_file"], default={}) or {}
+            return result.returncode == 0, {
+                "service_status": (service_status.stdout or service_status.stderr or "").strip(),
+                "logs": (logs.stdout or logs.stderr or "").strip(),
+                "report": report if isinstance(report, dict) else {},
+            }
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def dr_monitor_status(monitor_name: str = "default"):
+        try:
+            paths = SystemActions._dr_monitor_paths(monitor_name)
+            if not os.path.exists(paths["config_file"]):
+                return False, SystemActions._txt(
+                    f"Monitor DR nao encontrado: {monitor_name}",
+                    f"DR monitor not found: {monitor_name}",
+                )
+            config = SystemActions._read_json_file(paths["config_file"], default={}) or {}
+            timer_status = subprocess.run(["systemctl", "status", paths["timer_name"], "--no-pager"], capture_output=True, text=True, check=False)
+            service_status = subprocess.run(["systemctl", "status", f"{paths['service_name']}.service", "--no-pager"], capture_output=True, text=True, check=False)
+            report = SystemActions._read_json_file(paths["report_file"], default={}) or {}
+            return True, {
+                "config": config if isinstance(config, dict) else {},
+                "timer_status": (timer_status.stdout or timer_status.stderr or "").strip(),
+                "service_status": (service_status.stdout or service_status.stderr or "").strip(),
+                "report": report if isinstance(report, dict) else {},
+            }
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def _default_dr_runbook_templates():
+        return [
+            {
+                "runbook_name": "promover-replica",
+                "category": "semi",
+                "title": "Promover replica",
+                "summary": "Promove uma replica para primaria com validacao previa e rollback planejado.",
+                "impact": "Pode alterar o papel da base e interromper sincronizacao existente.",
+                "prechecks": [
+                    "Confirmar atraso da replica",
+                    "Confirmar saude da replica",
+                    "Confirmar aplicacao parada ou em modo manutencao",
+                ],
+                "rollback_plan": "Reverter trafego para a primaria anterior e reconfigurar replicacao.",
+                "requires_double_confirmation": True,
+                "requires_command": True,
+            },
+            {
+                "runbook_name": "trocar-dns",
+                "category": "semi",
+                "title": "Trocar DNS",
+                "summary": "Aplica a troca de DNS com validacao previa e plano de rollback.",
+                "impact": "Pode redirecionar trafego de producao para novo destino.",
+                "prechecks": [
+                    "Confirmar TTL atual",
+                    "Confirmar novo IP/hostname",
+                    "Confirmar saude do destino",
+                ],
+                "rollback_plan": "Restaurar o registro DNS anterior e monitorar propagacao.",
+                "requires_double_confirmation": True,
+                "requires_command": True,
+            },
+            {
+                "runbook_name": "restaurar-maquina-reserva",
+                "category": "semi",
+                "title": "Restaurar para maquina reserva",
+                "summary": "Executa a restauracao do backup na maquina reserva com checklist guiado.",
+                "impact": "Pode consumir recursos na reserva e alterar inventario de standby.",
+                "prechecks": [
+                    "Confirmar conectividade com a reserva",
+                    "Confirmar espaco em disco",
+                    "Confirmar artefato de backup validado",
+                ],
+                "rollback_plan": "Descartar restauracao incompleta e retornar a reserva ao estado anterior.",
+                "requires_double_confirmation": False,
+                "requires_command": True,
+            },
+            {
+                "runbook_name": "recriar-vps-iac",
+                "category": "semi",
+                "title": "Recriar VPS a partir de template/IaC",
+                "summary": "Executa o provisionamento automatizado da VPS reserva ou substituta.",
+                "impact": "Pode criar recursos novos e alterar inventario de infraestrutura.",
+                "prechecks": [
+                    "Confirmar template/IaC atualizado",
+                    "Confirmar credenciais do provedor",
+                    "Confirmar custos e naming da nova VPS",
+                ],
+                "rollback_plan": "Destruir a VPS criada e voltar ao ambiente anterior.",
+                "requires_double_confirmation": True,
+                "requires_command": True,
+            },
+            {
+                "runbook_name": "rotacionar-segredos",
+                "category": "semi",
+                "title": "Rotacionar segredos sensiveis",
+                "summary": "Gera rota controlada de segredos, com comando unico e confirmacao.",
+                "impact": "Pode invalidar credenciais em uso pelos servicos.",
+                "prechecks": [
+                    "Confirmar janela de manutencao",
+                    "Confirmar destinos que usam o segredo",
+                    "Confirmar plano de rollback e redistribuicao",
+                ],
+                "rollback_plan": "Restaurar o segredo anterior e reiniciar apenas os servicos afetados.",
+                "requires_double_confirmation": True,
+                "requires_command": True,
+            },
+            {
+                "runbook_name": "desastre-real-failover",
+                "category": "manual",
+                "title": "Desastre real com decisao de failover",
+                "summary": "Runbook guiado para decisao operacional de failover real.",
+                "impact": "Pode mover definitivamente o trafego de producao.",
+                "prechecks": [
+                    "Confirmar severidade e escopo do incidente",
+                    "Confirmar indisponibilidade real da primaria",
+                    "Aprovar failover com responsavel",
+                ],
+                "rollback_plan": "Definir criterios de retorno antes de acionar o failover.",
+                "requires_double_confirmation": True,
+                "requires_command": False,
+            },
+            {
+                "runbook_name": "restore-producao",
+                "category": "manual",
+                "title": "Restore para producao",
+                "summary": "Restaura backup em producao apenas sob aprovacao explicita.",
+                "impact": "Pode sobrescrever dados atuais de producao.",
+                "prechecks": [
+                    "Confirmar backup correto",
+                    "Confirmar snapshot ou backup previo do estado atual",
+                    "Confirmar aprovacao formal",
+                ],
+                "rollback_plan": "Restaurar o snapshot anterior ou backup do estado pre-restore.",
+                "requires_double_confirmation": True,
+                "requires_command": True,
+            },
+            {
+                "runbook_name": "troca-provedor-ip",
+                "category": "manual",
+                "title": "Troca definitiva de provedor/IP",
+                "summary": "Guia a migracao definitiva de ambiente e endereco de producao.",
+                "impact": "Pode alterar todas as rotas de acesso do ambiente.",
+                "prechecks": [
+                    "Confirmar novos IPs e dominos",
+                    "Confirmar ambiente destino pronto",
+                    "Confirmar plano de comunicacao",
+                ],
+                "rollback_plan": "Restaurar DNS e rotas para o provedor/IP anterior.",
+                "requires_double_confirmation": True,
+                "requires_command": False,
+            },
+            {
+                "runbook_name": "incidente-seguranca",
+                "category": "manual",
+                "title": "Incidente de seguranca/ransomware",
+                "summary": "Ativa o modo de contencao e preserva evidencias antes de qualquer restore.",
+                "impact": "Pode isolar servicos e suspender acesso externo.",
+                "prechecks": [
+                    "Preservar evidencias e logs",
+                    "Confirmar escopo do comprometimento",
+                    "Aprovar contencao",
+                ],
+                "rollback_plan": "Encerrar contencao gradualmente apos saneamento e validacao.",
+                "requires_double_confirmation": True,
+                "requires_command": False,
+            },
+        ]
+
+    @staticmethod
+    def list_dr_runbooks():
+        templates = {item["runbook_name"]: dict(item, source="built-in") for item in SystemActions._default_dr_runbook_templates()}
+        custom_dir = SystemActions._dr_runbooks_dir()
+        if os.path.isdir(custom_dir):
+            for name in sorted(os.listdir(custom_dir)):
+                if not name.endswith(".json"):
+                    continue
+                data = SystemActions._read_json_file(os.path.join(custom_dir, name), default={}) or {}
+                if isinstance(data, dict) and data.get("runbook_name"):
+                    data["source"] = "custom"
+                    templates[data["runbook_name"]] = data
+        return list(templates.values())
+
+    @staticmethod
+    def save_dr_runbook(
+        runbook_name: str,
+        title: str,
+        category: str,
+        summary: str,
+        impact: str,
+        command: str,
+        rollback_plan: str,
+        prechecks,
+        requires_double_confirmation: bool,
+        responsible: str = "",
+        notes: str = "",
+    ):
+        try:
+            if os.name == "nt":
+                return False, SystemActions._txt("Runbooks DR nao suportados no Windows.", "DR runbooks are not supported on Windows.")
+            safe_name = re.sub(r"[^A-Za-z0-9_-]", "-", runbook_name or "").strip("-")
+            if not safe_name:
+                return False, SystemActions._txt("Nome de runbook invalido.", "Invalid runbook name.")
+            payload = {
+                "runbook_name": safe_name,
+                "title": title.strip() or safe_name,
+                "category": (category or "manual").strip().lower(),
+                "summary": summary.strip(),
+                "impact": impact.strip(),
+                "command": command.strip(),
+                "rollback_plan": rollback_plan.strip(),
+                "prechecks": [item.strip() for item in (prechecks or []) if str(item).strip()],
+                "requires_double_confirmation": bool(requires_double_confirmation),
+                "responsible": responsible.strip(),
+                "notes": notes.strip(),
+                "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            file_path = os.path.join(SystemActions._dr_runbooks_dir(), f"{safe_name}.json")
+            ok, msg = SystemActions._write_json_file(file_path, payload, mode=0o600)
+            if not ok:
+                return False, msg
+            payload["runbook_file"] = file_path
+            return True, payload
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def execute_dr_runbook(
+        runbook_name: str,
+        operator_name: str,
+        approver_name: str = "",
+        execute_command: bool = False,
+        command_override: str = "",
+        capture_evidence: bool = False,
+    ):
+        started = time.time()
+        try:
+            runbooks = {item["runbook_name"]: item for item in SystemActions.list_dr_runbooks()}
+            runbook = runbooks.get(runbook_name)
+            if not runbook:
+                return False, SystemActions._txt(
+                    f"Runbook nao encontrado: {runbook_name}",
+                    f"Runbook not found: {runbook_name}",
+                )
+            chosen_command = (command_override or runbook.get("command") or "").strip()
+            evidence_bundle = {}
+            if capture_evidence:
+                evidence_name = f"{runbook_name}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+                ok, evidence = SystemActions.export_incident_evidence_bundle(evidence_name)
+                if ok:
+                    evidence_bundle = evidence
+            command_result = {"status": "skipped", "command": chosen_command, "output": ""}
+            if execute_command and chosen_command:
+                result = subprocess.run(["bash", "-lc", chosen_command], capture_output=True, text=True, check=False)
+                command_result = {
+                    "status": "success" if result.returncode == 0 else "failed",
+                    "command": chosen_command,
+                    "returncode": result.returncode,
+                    "output": ((result.stdout or "") + "\n" + (result.stderr or "")).strip()[-6000:],
+                }
+            payload = {
+                "runbook_name": runbook_name,
+                "title": runbook.get("title", runbook_name),
+                "category": runbook.get("category", ""),
+                "operator_name": operator_name.strip(),
+                "approver_name": approver_name.strip(),
+                "execute_command": execute_command,
+                "command_result": command_result,
+                "capture_evidence": capture_evidence,
+                "evidence_bundle": evidence_bundle,
+                "timeline": [
+                    {"event": "started", "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(started)))},
+                    {"event": "finished", "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
+                ],
+                "duration_seconds": int(time.time() - started),
+                "rollback_plan": runbook.get("rollback_plan", ""),
+                "impact": runbook.get("impact", ""),
+                "prechecks": runbook.get("prechecks", []),
+                "status": command_result["status"] if execute_command else "guided",
+            }
+            log_path = os.path.join(
+                SystemActions._dr_operation_logs_dir(),
+                f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}_{runbook_name}.json",
+            )
+            SystemActions._write_json_file(log_path, payload, mode=0o600)
+            payload["log_file"] = log_path
+            return True, payload
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def export_incident_evidence_bundle(
+        incident_name: str,
+        output_dir: str = "/var/backups/vps-tools/incidents",
+    ):
+        try:
+            if os.name == "nt":
+                return False, SystemActions._txt("Coleta de evidencias nao suportada no Windows.", "Evidence capture is not supported on Windows.")
+            safe_name = re.sub(r"[^A-Za-z0-9_-]", "-", incident_name or "").strip("-")
+            if not safe_name:
+                return False, SystemActions._txt("Nome do incidente invalido.", "Invalid incident name.")
+            timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+            root_dir = os.path.join(output_dir, f"{safe_name}_{timestamp}")
+            staging_dir = os.path.join(root_dir, "staging")
+            os.makedirs(staging_dir, exist_ok=True)
+            copy_targets = [
+                ("/var/log/nginx", os.path.join(staging_dir, "logs", "nginx")),
+                ("/var/log/auth.log", os.path.join(staging_dir, "logs", "auth.log")),
+                ("/var/log/syslog", os.path.join(staging_dir, "logs", "syslog")),
+            ]
+            copied = []
+            for src, dst in copy_targets:
+                ok, msg = SystemActions._copy_path_if_exists(src, dst)
+                if not ok:
+                    return False, msg
+                if msg:
+                    copied.append(src)
+            reports_dir = os.path.join(staging_dir, "reports")
+            os.makedirs(reports_dir, exist_ok=True)
+            commands = {
+                "journalctl-b.txt": ["journalctl", "-b", "-n", "2000", "--no-pager"],
+                "journalctl-nginx.txt": ["journalctl", "-u", "nginx", "-n", "500", "--no-pager"],
+                "journalctl-ssh.txt": ["journalctl", "-u", "ssh", "-n", "500", "--no-pager"],
+                "ss-ltnp.txt": ["ss", "-ltnp"],
+                "iptables-S.txt": ["iptables", "-S"],
+            }
+            for filename, cmd in commands.items():
+                result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                ok, msg = SystemActions._write_text_file(
+                    os.path.join(reports_dir, filename),
+                    (result.stdout or result.stderr or "").strip() + "\n",
+                    mode=0o600,
+                )
+                if not ok:
+                    return False, msg
+            manifest = {
+                "incident_name": safe_name,
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "copied_items": copied,
+                "report_files": sorted(commands.keys()),
+            }
+            ok, msg = SystemActions._write_json_file(os.path.join(staging_dir, "manifest.json"), manifest, mode=0o600)
+            if not ok:
+                return False, msg
+            os.makedirs(output_dir, exist_ok=True)
+            archive_path = os.path.join(output_dir, f"{safe_name}_{timestamp}.tar.gz")
+            with tarfile.open(archive_path, "w:gz") as tar:
+                tar.add(staging_dir, arcname=os.path.basename(staging_dir))
+            checksum_result = subprocess.run(["sha256sum", archive_path], capture_output=True, text=True, check=False)
+            checksum_path = f"{archive_path}.sha256"
+            ok, msg = SystemActions._write_text_file(checksum_path, (checksum_result.stdout or "").strip() + "\n", mode=0o600)
+            if not ok:
+                return False, msg
+            shutil.rmtree(root_dir, ignore_errors=True)
+            return True, {"archive_path": archive_path, "checksum_path": checksum_path}
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def record_dr_exercise(
+        exercise_name: str,
+        scenario: str,
+        mode: str,
+        profile_name: str = "",
+        job_name: str = "",
+        notes: str = "",
+        duration_seconds: int | None = None,
+    ):
+        try:
+            safe_name = re.sub(r"[^A-Za-z0-9_-]", "-", exercise_name or "").strip("-")
+            if not safe_name:
+                return False, SystemActions._txt("Nome do exercicio invalido.", "Invalid exercise name.")
+            assessment = {}
+            if profile_name:
+                ok, data = SystemActions.assess_dr_profile(profile_name, job_name)
+                assessment = data if ok else {"status": "failed", "message": data}
+            payload = {
+                "exercise_name": safe_name,
+                "scenario": scenario.strip(),
+                "mode": mode.strip(),
+                "profile_name": profile_name.strip(),
+                "job_name": job_name.strip(),
+                "notes": notes.strip(),
+                "duration_seconds": duration_seconds if duration_seconds is not None else 0,
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "assessment": assessment,
+            }
+            file_path = os.path.join(
+                SystemActions._dr_exercises_dir(),
+                f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}_{safe_name}.json",
+            )
+            ok, msg = SystemActions._write_json_file(file_path, payload, mode=0o600)
+            if not ok:
+                return False, msg
+            payload["exercise_file"] = file_path
+            return True, payload
         except Exception as exc:
             return False, str(exc)
 
