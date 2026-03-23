@@ -48,6 +48,14 @@ Suite de gerenciamento de VPS em Python para automacao de servicos, usuarios e f
   - Nginx reverse proxy configuravel
   - HTTPS com Certbot
   - painel web opcional de bancos com Docker + Adminer + pgAdmin 4 + Redis Insight
+- Painel Web Administrativo:
+  - opcional no menu inicial
+  - backend Spring Boot + frontend React
+  - login proprio
+  - dashboard grafico com status do host, componentes ativos/inativos e portas abertas
+  - execucao de automacoes do script com progresso em tempo real
+  - aba de tarefas com historico e logs
+  - publicacao opcional via Nginx + login + HTTPS
 - Internacionalizacao:
   - strings externas em `vps_tools/i18n/strings.json`
   - menu de idioma detecta automaticamente os codigos presentes no arquivo
@@ -312,6 +320,58 @@ Recomendacoes de seguranca:
 - se quiser publicar com dominio, coloque o painel atras de Nginx + HTTPS
 - se publicar com dominio, mantenha o login extra do Nginx ativado
 - o painel nao substitui o banco principal; ele apenas ajuda a administrar
+
+### 6.2 Painel web administrativo
+
+Se quiser operar o servidor pelo navegador, com login proprio e tarefas em tempo real:
+
+1. Entre em `06`
+2. Escolha `01` `INSTALAR PAINEL WEB ADMINISTRATIVO`
+3. Informe:
+   - diretorio do painel
+   - porta local
+   - bind do painel
+   - usuario inicial
+   - senha inicial
+   - nome do servico `systemd`
+4. Ao final, o script mostra:
+   - URL local
+   - URL remota
+   - login
+   - senha
+   - servico criado
+
+Depois da instalacao:
+
+1. Entre em `06`
+2. Escolha `02` `GERENCIAR PAINEL WEB ADMINISTRATIVO`
+
+Opcoes disponiveis:
+
+- iniciar painel
+- parar painel
+- reiniciar painel
+- status do painel
+- rebuild/atualizar painel
+- desinstalar painel
+- publicar painel via `Nginx + login`
+- ativar `HTTPS`
+
+O painel administrativo mostra:
+
+- dashboard grafico do host
+- componentes ativos/inativos
+- portas abertas
+- versao do script
+- abas para acoes e tarefas
+- progresso em tempo real das automacoes
+- historico das execucoes enviadas pelo navegador
+
+Recomendacao:
+
+- mantenha o bind em `127.0.0.1`
+- publique externamente apenas via `Nginx + login`
+- ative `HTTPS` antes de expor o painel para uso remoto
 
 ### 7. Alterar idioma
 

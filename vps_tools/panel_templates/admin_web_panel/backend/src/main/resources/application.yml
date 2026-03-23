@@ -1,0 +1,28 @@
+server:
+  address: ${HOST:127.0.0.1}
+  port: ${PORT:18600}
+  shutdown: graceful
+
+spring:
+  application:
+    name: vps-tools-admin-panel
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+
+vps:
+  panel:
+    username: ${VPS_PANEL_USERNAME:admin}
+    password: ${VPS_PANEL_PASSWORD:ChangeThisPassword123!}
+    script-repo-dir: ${VPS_PANEL_SCRIPT_REPO:/root/VpsToolsPy}
+    python-command: ${VPS_PANEL_PYTHON:/root/VpsToolsPy/venv/bin/python}
+    script-version: ${VPS_PANEL_SCRIPT_VERSION:unknown}

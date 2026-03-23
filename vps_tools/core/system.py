@@ -652,6 +652,24 @@ class SystemActions:
         return "python3"
 
     @staticmethod
+    def _git_short_head(repo_dir: str = "") -> str:
+        target = repo_dir or SystemActions._repo_root_dir()
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=target,
+        )
+        if result.returncode == 0:
+            return (result.stdout or "").strip() or "unknown"
+        return "unknown"
+
+    @staticmethod
+    def _admin_web_panel_template_dir() -> str:
+        return os.path.join(SystemActions._repo_root_dir(), "vps_tools", "panel_templates", "admin_web_panel")
+
+    @staticmethod
     def _parse_duration_to_seconds(value):
         if value is None:
             return None
@@ -1548,9 +1566,10 @@ class SystemActions:
         compose_file = os.path.join(app_dir, "compose.yml")
         installed = os.path.exists(compose_file)
         docker_active = False
-        result = subprocess.run(["systemctl", "is-active", "docker"], capture_output=True, text=True, check=False)
-        if result.returncode == 0 and result.stdout.strip() == "active":
-            docker_active = True
+        if shutil.which("systemctl"):
+            result = subprocess.run(["systemctl", "is-active", "docker"], capture_output=True, text=True, check=False)
+            if result.returncode == 0 and result.stdout.strip() == "active":
+                docker_active = True
 
         running = False
         ps_output = ""
@@ -5176,6 +5195,393 @@ class SystemActions:
 
     @staticmethod
     def secure_web_db_panel_https(
+        domains: list[str],
+        email: str,
+        redirect_https: bool = True,
+        progress_callback=None,
+    ):
+        return SystemActions.setup_certbot_https(
+            domains=domains,
+            email=email,
+            redirect_https=redirect_https,
+            progress_callback=progress_callback,
+        )
+
+    @staticmethod
+    def admin_web_panel_status(app_dir: str = "/opt/vps-tools-admin-panel", service_name: str = "vps-tools-admin-panel"):
+        env_file = os.path.join(app_dir, "panel.env")
+        jar_file = os.path.join(app_dir, "app.jar")
+        source_dir = os.path.join(app_dir, "source")
+        installed = os.path.exists(jar_file) and os.path.exists(env_file)
+        port = "18600"
+        host = "127.0.0.1"
+        username = "admin"
+        if os.path.exists(env_file):
+            try:
+                with open(env_file, "r", encoding="utf-8") as f:
+                    for raw_line in f:
+                        line = raw_line.strip()
+                        if not line or "=" not in line:
+                            continue
+                        key, value = line.split("=", 1)
+                        cleaned = value.strip().strip('"').strip("'")
+                        if key == "PORT" and cleaned:
+                            port = cleaned
+                        elif key == "HOST" and cleaned:
+                            host = cleaned
+                        elif key == "VPS_PANEL_USERNAME" and cleaned:
+                            username = cleaned
+            except Exception:
+                pass
+        service_active = False
+        service_status = ""
+        if shutil.which("systemctl"):
+            is_active = subprocess.run(["systemctl", "is-active", service_name], capture_output=True, text=True, check=False)
+            service_active = is_active.returncode == 0 and (is_active.stdout or "").strip() == "active"
+            status_result = subprocess.run(["systemctl", "status", service_name, "--no-pager"], capture_output=True, text=True, check=False)
+            service_status = (status_result.stdout or status_result.stderr or "").strip()
+        else:
+            service_status = SystemActions._txt(
+                "systemctl nao esta disponivel neste ambiente.",
+                "systemctl is not available in this environment.",
+            )
+        return {
+            "installed": installed,
+            "running": service_active,
+            "service_name": service_name,
+            "app_dir": app_dir,
+            "source_dir": source_dir,
+            "jar_file": jar_file,
+            "env_file": env_file,
+            "panel_port": port,
+            "host": host,
+            "username": username,
+            "local_url": f"http://{host}:{port}/",
+            "remote_url": f"http://{SystemInfo.get_ip()}:{port}/",
+            "service_status": service_status,
+        }
+
+    @staticmethod
+    def install_admin_web_panel(
+        app_dir: str = "/opt/vps-tools-admin-panel",
+        panel_port: int = 18600,
+        panel_host: str = "127.0.0.1",
+        login_user: str = "admin",
+        login_password: str = "",
+        service_name: str = "vps-tools-admin-panel",
+        run_user: str = "root",
+        progress_callback=None,
+    ):
+        def update(percent: int | None = None, text: str = "", **kwargs):
+            if percent is None:
+                percent = kwargs.get("completed", 0)
+            if not text:
+                text = kwargs.get("description", "")
+            if progress_callback:
+                progress_callback(completed=percent, description=f"[cyan]{text}[/cyan]")
+
+        try:
+            if os.name == "nt":
+                return False, SystemActions._txt(
+                    "Painel web administrativo nao suportado no Windows.",
+                    "Administrative web panel is not supported on Windows.",
+                )
+            if SystemActions._package_manager() != "apt":
+                return False, SystemActions._txt(
+                    "Instalacao automatica do painel administrativo disponivel apenas para Debian/Ubuntu.",
+                    "Automatic installation of the administrative panel is available only on Debian/Ubuntu.",
+                )
+            ok, msg = SystemActions._validate_service_name(service_name)
+            if not ok:
+                return False, msg
+            if not login_user.strip():
+                return False, SystemActions._txt("Usuario do painel nao pode ser vazio.", "Panel user cannot be empty.")
+            if not login_password:
+                login_password = SystemActions._random_secret(20)
+            template_dir = SystemActions._admin_web_panel_template_dir()
+            if not os.path.isdir(template_dir):
+                return False, SystemActions._txt(
+                    "Template do painel administrativo nao encontrado no repositorio.",
+                    "Administrative panel template was not found in the repository.",
+                )
+
+            source_dir = os.path.join(app_dir, "source")
+            backend_dir = os.path.join(source_dir, "backend")
+            target_dir = os.path.join(backend_dir, "target")
+            env_file = os.path.join(app_dir, "panel.env")
+            jar_target = os.path.join(app_dir, "app.jar")
+
+            update(5, SystemActions._txt("Instalando Java 17 e Maven", "Installing Java 17 and Maven"))
+            result = subprocess.run(["apt-get", "update", "-y"], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt("Falha no apt-get update.", "apt-get update failed.")
+            result = subprocess.run(
+                ["apt-get", "install", "-y", "openjdk-17-jdk-headless", "maven"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha na instalacao do Java/Maven.",
+                    "Java/Maven installation failed.",
+                )
+
+            update(20, SystemActions._txt("Copiando template do painel", "Copying the panel template"))
+            ok, msg = SystemActions._copy_path_if_exists(template_dir, source_dir)
+            if not ok:
+                return False, msg
+
+            update(35, SystemActions._txt("Gravando ambiente do painel", "Writing panel environment"))
+            env_vars = {
+                "HOST": panel_host,
+                "PORT": str(panel_port),
+                "VPS_PANEL_USERNAME": login_user,
+                "VPS_PANEL_PASSWORD": login_password,
+                "VPS_PANEL_SCRIPT_REPO": SystemActions._repo_root_dir(),
+                "VPS_PANEL_PYTHON": SystemActions._preferred_python_binary(),
+                "VPS_PANEL_SCRIPT_VERSION": SystemActions._git_short_head(),
+            }
+            ok, msg = SystemActions.write_environment_file(env_file, env_vars, owner_user="")
+            if not ok:
+                return False, msg
+
+            update(55, SystemActions._txt("Buildando frontend e backend", "Building frontend and backend"))
+            result = subprocess.run(
+                ["mvn", "-q", "-DskipTests", "package"],
+                capture_output=True,
+                text=True,
+                check=False,
+                cwd=backend_dir,
+            )
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                    "Falha no build Maven do painel administrativo.",
+                    "Administrative panel Maven build failed.",
+                )
+
+            built_jar = os.path.join(target_dir, "vps-tools-admin-panel-0.1.0.jar")
+            if not os.path.exists(built_jar):
+                jars = [
+                    os.path.join(target_dir, name)
+                    for name in os.listdir(target_dir)
+                    if name.endswith(".jar") and not name.endswith(".original")
+                ] if os.path.isdir(target_dir) else []
+                if not jars:
+                    return False, SystemActions._txt(
+                        "JAR final do painel nao foi encontrado apos o build.",
+                        "The final panel JAR was not found after the build.",
+                    )
+                built_jar = jars[0]
+            ok, msg = SystemActions._copy_path_if_exists(built_jar, jar_target)
+            if not ok:
+                return False, msg
+
+            update(75, SystemActions._txt("Criando servico systemd do painel", "Creating the panel systemd service"))
+            service_result = SystemActions.create_systemd_service(
+                service_name=service_name,
+                description="VpsToolsPy Administrative Web Panel",
+                exec_start=f"/usr/bin/java -jar {jar_target}",
+                working_dir=app_dir,
+                run_user=run_user,
+                environment_file=env_file,
+                progress_callback=update,
+            )
+            if not service_result[0]:
+                return service_result
+
+            status = SystemActions.admin_web_panel_status(app_dir=app_dir, service_name=service_name)
+            update(100, SystemActions._txt("Painel administrativo instalado", "Administrative panel installed"))
+            return True, {
+                "app_dir": app_dir,
+                "source_dir": source_dir,
+                "backend_dir": backend_dir,
+                "jar_file": jar_target,
+                "env_file": env_file,
+                "panel_port": panel_port,
+                "panel_host": panel_host,
+                "service_name": service_name,
+                "login_user": login_user,
+                "login_password": login_password,
+                "local_url": status["local_url"],
+                "remote_url": status["remote_url"],
+                "service_status": status["service_status"],
+                "notes": [
+                    SystemActions._txt("o painel sobe localmente em 127.0.0.1 por padrao", "the panel listens locally on 127.0.0.1 by default"),
+                    SystemActions._txt("o backend roda com perfil administrativo para conseguir executar automacoes do script", "the backend runs with an administrative profile so it can execute script automations"),
+                    SystemActions._txt("publique via Nginx + login e depois ative HTTPS para acesso externo", "publish via Nginx + login and then enable HTTPS for external access"),
+                ],
+            }
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def manage_admin_web_panel(
+        app_dir: str = "/opt/vps-tools-admin-panel",
+        service_name: str = "vps-tools-admin-panel",
+        action: str = "status",
+        remove_files: bool = False,
+    ):
+        try:
+            if action not in {"start", "stop", "restart", "status", "rebuild", "uninstall"}:
+                return False, SystemActions._txt(
+                    f"Acao invalida para o painel administrativo: {action}",
+                    f"Invalid administrative panel action: {action}",
+                )
+            status = SystemActions.admin_web_panel_status(app_dir=app_dir, service_name=service_name)
+            if not status.get("installed") and action != "status":
+                return False, SystemActions._txt(
+                    "Painel administrativo nao encontrado.",
+                    "Administrative panel was not found.",
+                )
+            if action == "status":
+                return True, status["service_status"] or SystemActions._txt("Painel instalado, mas sem status disponivel.", "Panel installed, but no status is available.")
+            if action == "rebuild":
+                env_data = {"PORT": status["panel_port"], "HOST": status["host"], "VPS_PANEL_USERNAME": status["username"]}
+                env_file = status["env_file"]
+                password = ""
+                if os.path.exists(env_file):
+                    with open(env_file, "r", encoding="utf-8") as f:
+                        for raw_line in f:
+                            if raw_line.startswith("VPS_PANEL_PASSWORD="):
+                                password = raw_line.split("=", 1)[1].strip().strip("'").strip('"')
+                                break
+                return SystemActions.install_admin_web_panel(
+                    app_dir=app_dir,
+                    panel_port=int(env_data["PORT"]),
+                    panel_host=env_data["HOST"],
+                    login_user=env_data["VPS_PANEL_USERNAME"],
+                    login_password=password,
+                    service_name=service_name,
+                    run_user="root",
+                )
+            if action == "uninstall":
+                subprocess.run(["systemctl", "disable", service_name], capture_output=True, text=True, check=False)
+                subprocess.run(["systemctl", "stop", service_name], capture_output=True, text=True, check=False)
+                unit_path = f"/etc/systemd/system/{service_name}.service"
+                if os.path.exists(unit_path):
+                    os.remove(unit_path)
+                subprocess.run(["systemctl", "daemon-reload"], capture_output=True, text=True, check=False)
+                if remove_files and os.path.isdir(app_dir):
+                    shutil.rmtree(app_dir, ignore_errors=True)
+                return True, SystemActions._txt("Painel administrativo removido.", "Administrative panel removed.")
+            result = SystemActions.systemd_service_action(service_name=service_name, action=action)
+            return result
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def publish_admin_web_panel_via_nginx(
+        app_dir: str = "/opt/vps-tools-admin-panel",
+        service_name: str = "vps-tools-admin-panel",
+        site_name: str = "admin-panel",
+        server_names: list[str] | None = None,
+        publish_target: str = "domain",
+        ip_host: str = "",
+        auth_user: str = "admin",
+        auth_password: str = "",
+        progress_callback=None,
+    ):
+        def update(percent: int, text: str):
+            if progress_callback:
+                progress_callback(completed=percent, description=f"[cyan]{text}[/cyan]")
+
+        try:
+            status = SystemActions.admin_web_panel_status(app_dir=app_dir, service_name=service_name)
+            if not status.get("installed"):
+                return False, SystemActions._txt("Painel administrativo nao instalado.", "Administrative panel is not installed.")
+            if not auth_password:
+                auth_password = SystemActions._random_secret(18)
+            publish_target = (publish_target or "domain").strip().lower()
+            server_names = [item.strip() for item in (server_names or []) if item.strip()]
+            if publish_target == "domain" and not server_names:
+                return False, SystemActions._txt("Informe ao menos um dominio/server_name.", "Provide at least one domain/server_name.")
+            if publish_target == "ip":
+                publish_host = (ip_host or "").strip() or SystemInfo.get_ip()
+                if not publish_host or publish_host.lower() == "unknown":
+                    return False, SystemActions._txt("Nao foi possivel detectar o IP publico.", "Could not detect the public IP.")
+                server_name_line = publish_host
+                published_url = f"http://{publish_host}/"
+            else:
+                server_name_line = " ".join(server_names)
+                published_url = f"http://{server_names[0]}/"
+
+            update(10, SystemActions._txt("Instalando Nginx e OpenSSL", "Installing Nginx and OpenSSL"))
+            result = subprocess.run(["apt-get", "update", "-y"], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt("Falha no apt-get update.", "apt-get update failed.")
+            result = subprocess.run(["apt-get", "install", "-y", "nginx", "openssl"], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt("Falha na instalacao do Nginx/OpenSSL.", "Nginx/OpenSSL installation failed.")
+
+            update(35, SystemActions._txt("Gerando arquivo de autenticacao", "Generating authentication file"))
+            ok, hashed = SystemActions._openssl_apr1_hash(auth_password)
+            if not ok:
+                return False, hashed
+            htpasswd_path = f"/etc/nginx/.htpasswd-{site_name}"
+            ok, msg = SystemActions._write_text_file(htpasswd_path, f"{auth_user}:{hashed}\n", mode=0o640)
+            if not ok:
+                return False, msg
+            subprocess.run(["chown", "root:www-data", htpasswd_path], capture_output=True, text=True, check=False)
+            subprocess.run(["chmod", "640", htpasswd_path], capture_output=True, text=True, check=False)
+
+            conf_content = (
+                "server {\n"
+                "    listen 80;\n"
+                "    listen [::]:80;\n"
+                f"    server_name {server_name_line};\n"
+                '    auth_basic "Restricted Area";\n'
+                f"    auth_basic_user_file {htpasswd_path};\n"
+                "    location / {\n"
+                f"        proxy_pass http://127.0.0.1:{status['panel_port']}/;\n"
+                "        proxy_http_version 1.1;\n"
+                "        proxy_set_header Host $host;\n"
+                "        proxy_set_header Upgrade $http_upgrade;\n"
+                '        proxy_set_header Connection "upgrade";\n'
+                "        proxy_set_header X-Real-IP $remote_addr;\n"
+                "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
+                "        proxy_set_header X-Forwarded-Proto $scheme;\n"
+                "    }\n"
+                "}\n"
+            )
+            update(60, SystemActions._txt("Gravando virtual host do painel", "Writing the panel virtual host"))
+            available = f"/etc/nginx/sites-available/{site_name}"
+            enabled = f"/etc/nginx/sites-enabled/{site_name}"
+            ok, msg = SystemActions._write_text_file(available, conf_content)
+            if not ok:
+                return False, msg
+            if not os.path.exists(enabled):
+                os.symlink(available, enabled)
+
+            update(80, SystemActions._txt("Validando e reiniciando Nginx", "Validating and restarting Nginx"))
+            result = subprocess.run(["nginx", "-t"], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt("Falha no nginx -t.", "nginx -t failed.")
+            for cmd in (["systemctl", "enable", "nginx"], ["systemctl", "restart", "nginx"]):
+                result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                if result.returncode != 0:
+                    return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+                        f"Falha ao executar: {' '.join(cmd)}",
+                        f"Failed to execute: {' '.join(cmd)}",
+                    )
+
+            status_result = subprocess.run(["systemctl", "status", "nginx", "--no-pager"], capture_output=True, text=True, check=False)
+            update(100, SystemActions._txt("Painel administrativo publicado", "Administrative panel published"))
+            return True, {
+                "site_name": site_name,
+                "publish_target": publish_target,
+                "config_file": available,
+                "htpasswd_file": htpasswd_path,
+                "auth_user": auth_user,
+                "auth_password": auth_password,
+                "published_url": published_url,
+                "nginx_status": (status_result.stdout or status_result.stderr or "").strip(),
+            }
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
+    def secure_admin_web_panel_https(
         domains: list[str],
         email: str,
         redirect_https: bool = True,

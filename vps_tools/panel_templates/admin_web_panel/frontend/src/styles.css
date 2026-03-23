@@ -1,0 +1,283 @@
+:root {
+  color-scheme: light;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  background:
+    radial-gradient(circle at top left, rgba(20, 184, 166, 0.16), transparent 26%),
+    radial-gradient(circle at bottom right, rgba(245, 158, 11, 0.16), transparent 28%),
+    #f4efe6;
+  color: #172033;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+.loading-screen,
+.login-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.login-card,
+.panel-card {
+  background: rgba(255, 252, 245, 0.92);
+  border: 1px solid rgba(23, 32, 51, 0.08);
+  border-radius: 24px;
+  box-shadow: 0 20px 70px rgba(23, 32, 51, 0.08);
+}
+
+.login-card {
+  width: min(480px, 100%);
+  padding: 32px;
+}
+
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-size: 0.75rem;
+  color: #0f766e;
+  margin-bottom: 8px;
+}
+
+.app-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 280px 1fr;
+}
+
+.sidebar {
+  padding: 28px;
+  border-right: 1px solid rgba(23, 32, 51, 0.08);
+  background: rgba(255, 252, 245, 0.66);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.nav-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.nav-item,
+.ghost-button,
+.primary-button,
+.task-item {
+  border: none;
+  border-radius: 16px;
+  cursor: pointer;
+}
+
+.nav-item,
+.ghost-button {
+  text-align: left;
+  padding: 14px 16px;
+  background: rgba(23, 32, 51, 0.04);
+}
+
+.nav-item.active,
+.primary-button {
+  background: linear-gradient(135deg, #0f766e, #155e75);
+  color: white;
+}
+
+.primary-button {
+  padding: 14px 18px;
+  font-weight: 700;
+}
+
+.content-shell {
+  padding: 24px;
+  display: grid;
+  gap: 18px;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 8px 14px;
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid rgba(23, 32, 51, 0.08);
+}
+
+.grid-layout {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.hero-card,
+.full-span {
+  grid-column: 1 / -1;
+}
+
+.panel-card {
+  padding: 24px;
+}
+
+.pill-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.metric-card {
+  padding: 14px;
+  border-radius: 18px;
+  background: rgba(23, 32, 51, 0.04);
+}
+
+.metric-card small,
+label {
+  display: grid;
+  gap: 6px;
+  color: #475569;
+}
+
+input,
+textarea,
+select {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(23, 32, 51, 0.12);
+  background: white;
+}
+
+.stack {
+  display: grid;
+  gap: 14px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th,
+.table td {
+  padding: 12px;
+  border-bottom: 1px solid rgba(23, 32, 51, 0.08);
+  text-align: left;
+}
+
+.state-green {
+  color: #0f766e;
+  font-weight: 700;
+}
+
+.state-red {
+  color: #be123c;
+  font-weight: 700;
+}
+
+.actions-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 18px;
+}
+
+.task-layout {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 18px;
+}
+
+.task-list {
+  display: grid;
+  gap: 10px;
+}
+
+.task-item {
+  text-align: left;
+  background: rgba(23, 32, 51, 0.04);
+  padding: 14px;
+  display: grid;
+  gap: 4px;
+}
+
+.task-item.active {
+  outline: 2px solid #0f766e;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(23, 32, 51, 0.08);
+  overflow: hidden;
+}
+
+.progress-bar div {
+  height: 100%;
+  background: linear-gradient(135deg, #14b8a6, #f59e0b);
+}
+
+.log-box {
+  margin: 0;
+  max-height: 560px;
+  overflow: auto;
+  padding: 16px;
+  border-radius: 18px;
+  background: #111827;
+  color: #e5e7eb;
+  font-size: 0.8rem;
+}
+
+.error-box {
+  color: #be123c;
+  background: rgba(244, 63, 94, 0.08);
+  border: 1px solid rgba(244, 63, 94, 0.2);
+  padding: 12px;
+  border-radius: 14px;
+}
+
+.about-list {
+  padding-left: 18px;
+}
+
+.toggle-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+@media (max-width: 960px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .grid-layout,
+  .task-layout {
+    grid-template-columns: 1fr;
+  }
+}

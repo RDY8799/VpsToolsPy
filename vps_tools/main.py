@@ -189,6 +189,8 @@ class VPSToolsApp:
                 "instalacao do banco redis": "Redis cache/session/queue setup",
                 "instalacao do painel web de bancos": "web database panel installation",
                 "gerenciamento do painel web de bancos": "web database panel management",
+                "instalacao do painel web administrativo": "administrative web panel installation",
+                "gerenciamento do painel web administrativo": "administrative web panel management",
                 "configuracao de reverse proxy nginx": "Nginx reverse proxy setup",
                 "configuracao de https com certbot": "HTTPS with Certbot setup",
                 "criacao de servico systemd generico": "generic systemd service creation",
@@ -1711,6 +1713,236 @@ class VPSToolsApp:
             self.ui.print_error(data)
         self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
 
+    def _admin_web_panel_status_panel(self):
+        status = self.sys_actions.admin_web_panel_status()
+        rows = [
+            (self._txt("Painel administrativo", "Administrative panel"), self._status_badge(status.get("running", False)), status.get("service_name", "-")),
+            (self._txt("Diretorio", "Directory"), "[cyan]" + status.get("app_dir", "-") + "[/cyan]", status.get("source_dir", "-")),
+            (self._txt("URL local", "Local URL"), "[cyan]" + status.get("local_url", "-") + "[/cyan]", self._txt("bind local por padrao", "local bind by default")),
+        ]
+        body = "\n".join(
+            f"[white]{label}:[/white] {value} [dim]{note}[/dim]"
+            for label, value, note in rows
+        )
+        self.ui.console.print(
+            Panel(
+                body,
+                title=self._txt("STATUS DO PAINEL ADMINISTRATIVO", "ADMINISTRATIVE PANEL STATUS"),
+                border_style="blue",
+            )
+        )
+
+    def _admin_web_panel_setup_flow(self):
+        if not self._confirm("instalacao do painel web administrativo"):
+            return
+
+        self.ui.console.print(
+            Panel(
+                self._txt(
+                    "Este modulo instala um painel web administrativo completo com backend Spring Boot e frontend React.\n"
+                    "Ele fica local em 127.0.0.1 por padrao, exige login proprio e consegue acionar automacoes do script com progresso em tempo real.",
+                    "This module installs a full administrative web panel with a Spring Boot backend and a React frontend.\n"
+                    "It stays local on 127.0.0.1 by default, requires its own login, and can trigger script automations with real-time progress.",
+                ),
+                title=self._txt("PAINEL WEB ADMINISTRATIVO", "ADMINISTRATIVE WEB PANEL"),
+                border_style="yellow",
+            )
+        )
+
+        app_dir = self._prompt_default("Diretorio do painel administrativo", "Administrative panel directory", "/opt/vps-tools-admin-panel")
+        panel_port = self._prompt_int_default("Porta local do painel administrativo", "Administrative panel local port", 18600)
+        panel_host = self._prompt_default("Bind do painel administrativo", "Administrative panel bind host", "127.0.0.1")
+        login_user = self._prompt_default("Usuario inicial do painel", "Initial panel username", "admin")
+        login_password = self._prompt_default("Senha inicial do painel (vazio = gerar)", "Initial panel password (empty = generate)", "")
+        service_name = self._prompt_default("Nome do servico systemd", "systemd service name", "vps-tools-admin-panel")
+
+        def worker(update):
+            return self.sys_actions.install_admin_web_panel(
+                app_dir=app_dir,
+                panel_port=panel_port,
+                panel_host=panel_host,
+                login_user=login_user,
+                login_password=login_password,
+                service_name=service_name,
+                run_user="root",
+                progress_callback=update,
+            )
+
+        ok, data = self.ui.run_animated_task(
+            self._txt("Instalando painel web administrativo", "Installing administrative web panel"),
+            worker,
+        )
+        if ok:
+            notes = "\n".join(f"- {item}" for item in data["notes"])
+            self.ui.console.print(
+                Panel(
+                    f"[white]{self._txt('Diretorio', 'Directory')}:[/white] [cyan]{data['app_dir']}[/cyan]\n"
+                    f"[white]{self._txt('Servico', 'Service')}:[/white] [cyan]{data['service_name']}[/cyan]\n"
+                    f"[white]{self._txt('URL local', 'Local URL')}:[/white] [cyan]{data['local_url']}[/cyan]\n"
+                    f"[white]{self._txt('URL remota', 'Remote URL')}:[/white] [cyan]{data['remote_url']}[/cyan]\n"
+                    f"[white]{self._txt('Login', 'Login')}:[/white] [cyan]{data['login_user']}[/cyan]\n"
+                    f"[white]{self._txt('Senha', 'Password')}:[/white] [cyan]{data['login_password']}[/cyan]\n"
+                    f"[white]Env:[/white] [cyan]{data['env_file']}[/cyan]\n"
+                    f"[white]JAR:[/white] [cyan]{data['jar_file']}[/cyan]\n\n"
+                    f"[white]{self._txt('Observacoes', 'Notes')}:[/white]\n{notes}\n\n"
+                    f"{data['service_status'][-2500:]}",
+                    title=self._txt("PAINEL ADMINISTRATIVO INSTALADO", "ADMINISTRATIVE PANEL INSTALLED"),
+                    border_style="green",
+                )
+            )
+        else:
+            self.ui.print_error(data)
+        self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+
+    def _admin_web_panel_manage_flow(self):
+        if not self._confirm("gerenciamento do painel web administrativo"):
+            return
+
+        app_dir = self._prompt_default("Diretorio do painel administrativo", "Administrative panel directory", "/opt/vps-tools-admin-panel")
+        service_name = self._prompt_default("Nome do servico do painel", "Panel service name", "vps-tools-admin-panel")
+        self.ui.console.print(f"[yellow]1)[/yellow] {self._txt('Iniciar painel', 'Start panel')}")
+        self.ui.console.print(f"[yellow]2)[/yellow] {self._txt('Parar painel', 'Stop panel')}")
+        self.ui.console.print(f"[yellow]3)[/yellow] {self._txt('Reiniciar painel', 'Restart panel')}")
+        self.ui.console.print(f"[yellow]4)[/yellow] {self._txt('Status do painel', 'Panel status')}")
+        self.ui.console.print(f"[yellow]5)[/yellow] {self._txt('Rebuild/atualizar painel', 'Rebuild/update panel')}")
+        self.ui.console.print(f"[yellow]6)[/yellow] {self._txt('Desinstalar painel', 'Uninstall panel')}")
+        self.ui.console.print(f"[yellow]7)[/yellow] {self._txt('Publicar painel via Nginx + login', 'Publish panel via Nginx + login')}")
+        self.ui.console.print(f"[yellow]8)[/yellow] {self._txt('Ativar HTTPS no painel', 'Enable HTTPS on panel')}")
+        option = self._normalize_option(self.ui.prompt(self._txt("Opcao: ", "Option: ")))
+
+        if option == "7":
+            site_name = self._prompt_default("Nome do site Nginx", "Nginx site name", "admin-panel")
+            publish_by_ip = self._prompt_bool_default("Publicar por IP publico em HTTP", "Publish by public IP over HTTP", False)
+            target_ip = ""
+            domains = []
+            if publish_by_ip:
+                target_ip = self._prompt_default("IP publico do painel (vazio = detectar automaticamente)", "Panel public IP (empty = auto-detect)", "")
+            else:
+                domains = self._prompt_default("Dominios/server_name separados por espaco", "Domains/server_name separated by spaces", "admin.example.com").split()
+            auth_user = self._prompt_default("Usuario de acesso do painel", "Panel access username", "admin")
+            auth_password = self._prompt_default("Senha de acesso do painel (vazio = gerar)", "Panel access password (empty = generate)", "")
+
+            def worker(update):
+                return self.sys_actions.publish_admin_web_panel_via_nginx(
+                    app_dir=app_dir,
+                    service_name=service_name,
+                    site_name=site_name,
+                    server_names=domains,
+                    publish_target="ip" if publish_by_ip else "domain",
+                    ip_host=target_ip,
+                    auth_user=auth_user,
+                    auth_password=auth_password,
+                    progress_callback=update,
+                )
+
+            ok, data = self.ui.run_animated_task(self._txt("Publicando painel via Nginx", "Publishing panel via Nginx"), worker)
+            if ok:
+                self.ui.console.print(
+                    Panel(
+                        f"[white]URL:[/white] [cyan]{data['published_url']}[/cyan]\n"
+                        f"[white]Login:[/white] [cyan]{data['auth_user']}[/cyan]\n"
+                        f"[white]Senha:[/white] [cyan]{data['auth_password']}[/cyan]\n"
+                        f"[white]Config:[/white] [cyan]{data['config_file']}[/cyan]\n"
+                        f"[white]Auth file:[/white] [cyan]{data['htpasswd_file']}[/cyan]\n\n"
+                        f"{data['nginx_status'][-2500:]}",
+                        title=self._txt("PAINEL ADMINISTRATIVO PUBLICADO", "ADMINISTRATIVE PANEL PUBLISHED"),
+                        border_style="green",
+                    )
+                )
+            else:
+                self.ui.print_error(data)
+            self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+            return
+
+        if option == "8":
+            domains = self._prompt_default("Dominios HTTPS separados por espaco", "HTTPS domains separated by spaces", "admin.example.com").split()
+            email = self._prompt_default("E-mail do Let's Encrypt", "Let's Encrypt email", "admin@example.com")
+            redirect_https = self._prompt_bool_default("Redirecionar HTTP para HTTPS", "Redirect HTTP to HTTPS", True)
+
+            def worker(update):
+                return self.sys_actions.secure_admin_web_panel_https(
+                    domains=domains,
+                    email=email,
+                    redirect_https=redirect_https,
+                    progress_callback=update,
+                )
+
+            ok, data = self.ui.run_animated_task(self._txt("Ativando HTTPS no painel", "Enabling panel HTTPS"), worker)
+            if ok:
+                self.ui.console.print(
+                    Panel(
+                        f"[white]Domains:[/white] [cyan]{data['domains']}[/cyan]\n"
+                        f"[white]Email:[/white] [cyan]{data['email']}[/cyan]\n\n"
+                        f"[white]Certbot[/white]\n{data['certbot_output'][-1200:]}\n\n"
+                        f"[white]Timer[/white]\n{data['timer_status'][-1200:]}",
+                        title=self._txt("HTTPS DO PAINEL ADMINISTRATIVO CONFIGURADO", "ADMIN PANEL HTTPS CONFIGURED"),
+                        border_style="green",
+                    )
+                )
+            else:
+                self.ui.print_error(data)
+            self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+            return
+
+        action_map = {
+            "1": "start",
+            "2": "stop",
+            "3": "restart",
+            "4": "status",
+            "5": "rebuild",
+            "6": "uninstall",
+        }
+        action = action_map.get(option)
+        if not action:
+            self.ui.print_error(self.lang.t("menu.invalid", "Opcao invalida!"))
+            time.sleep(1)
+            return
+
+        remove_files = False
+        if action == "uninstall":
+            remove_files = self._prompt_bool_default("Remover tambem os arquivos do painel", "Also remove the panel files", False)
+
+        ok, data = self.sys_actions.manage_admin_web_panel(
+            app_dir=app_dir,
+            service_name=service_name,
+            action=action,
+            remove_files=remove_files,
+        )
+        if ok:
+            rendered = data[-4000:] if isinstance(data, str) else str(data)
+            self.ui.console.print(
+                Panel(
+                    rendered,
+                    title=self._txt("STATUS DO PAINEL ADMINISTRATIVO", "ADMINISTRATIVE PANEL STATUS"),
+                    border_style="blue",
+                )
+            )
+        else:
+            self.ui.print_error(data)
+        self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+
+    def admin_web_panel_menu(self):
+        while True:
+            self.ui.clear()
+            self._admin_web_panel_status_panel()
+            options = {
+                "01": self._txt("INSTALAR PAINEL WEB ADMINISTRATIVO", "INSTALL ADMINISTRATIVE WEB PANEL"),
+                "02": self._txt("GERENCIAR PAINEL WEB ADMINISTRATIVO", "MANAGE ADMINISTRATIVE WEB PANEL"),
+                "00": self.lang.t("menu.back", "VOLTAR"),
+            }
+            self.ui.draw_menu(options, self._txt("PAINEL WEB ADMINISTRATIVO", "ADMINISTRATIVE WEB PANEL"))
+            option = self._normalize_option(self.ui.prompt())
+
+            if option == "1":
+                self._admin_web_panel_setup_flow()
+            elif option == "2":
+                self._admin_web_panel_manage_flow()
+            elif option == "00":
+                break
+            else:
+                self.ui.print_error(self.lang.t("menu.invalid", "Opcao invalida!"))
+                time.sleep(2)
+
     def _https_certbot_flow(self):
         if not self._confirm("configuracao de https com certbot"):
             return
@@ -1926,7 +2158,8 @@ class VPSToolsApp:
                 "03": self.lang.t("main.tools", "FERRAMENTAS DO SISTEMA"),
                 "04": self._txt("BANCO DE DADOS / BACKEND", "DATABASE / BACKEND"),
                 "05": self._txt("RECUPERACAO / DR", "RECOVERY / DR"),
-                "06": self.lang.t("main.about", "SOBRE"),
+                "06": self._txt("PAINEL WEB ADMINISTRATIVO", "ADMINISTRATIVE WEB PANEL"),
+                "07": self.lang.t("main.about", "SOBRE"),
                 "00": self.lang.t("main.exit", "SAIR"),
             }
             self.ui.draw_menu(options)
@@ -1944,6 +2177,8 @@ class VPSToolsApp:
             elif option == "5":
                 self.disaster_recovery_menu()
             elif option == "6":
+                self.admin_web_panel_menu()
+            elif option == "7":
                 self.about()
             elif option == "00":
                 sys.exit(0)
