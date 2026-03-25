@@ -5281,6 +5281,91 @@ class SystemActions:
                 progress_callback(completed=percent, description=f"[cyan]{text}[/cyan]")
 
         try:
+            def run_command(cmd, *, cwd=None, attempts: int = 1, delay_sec: int = 2):
+                last_result = None
+                for attempt in range(1, attempts + 1):
+                    last_result = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        cwd=cwd,
+                    )
+                    if last_result.returncode == 0:
+                        return True, last_result
+                    if attempt < attempts:
+                        time.sleep(delay_sec)
+                output = (
+                    (last_result.stderr or "").strip()
+                    or (last_result.stdout or "").strip()
+                    or SystemActions._txt(
+                        f"Falha ao executar: {' '.join(cmd)}",
+                        f"Failed to execute: {' '.join(cmd)}",
+                    )
+                )
+                return False, output
+
+            def cleanup_build_artifacts():
+                frontend_dir = os.path.join(source_dir, "frontend")
+                for path in [
+                    target_dir,
+                    os.path.join(frontend_dir, "dist"),
+                    os.path.join(frontend_dir, "node"),
+                    os.path.join(frontend_dir, "node_modules"),
+                ]:
+                    if os.path.isdir(path):
+                        shutil.rmtree(path, ignore_errors=True)
+
+            def build_panel():
+                update(55, SystemActions._txt("Buildando frontend e backend", "Building frontend and backend"))
+                ok_build, build_result = run_command(
+                    ["mvn", "-q", "-DskipTests", "package"],
+                    cwd=backend_dir,
+                    attempts=1,
+                )
+                if ok_build:
+                    return True, build_result
+
+                update(62, SystemActions._txt("Build falhou, limpando artefatos e tentando novamente", "Build failed, cleaning artifacts and retrying"))
+                cleanup_build_artifacts()
+                return run_command(
+                    ["mvn", "-DskipTests", "clean", "package"],
+                    cwd=backend_dir,
+                    attempts=2,
+                    delay_sec=3,
+                )
+
+            def wait_panel_ready(timeout_sec: int = 45):
+                health_host = panel_host.strip() or "127.0.0.1"
+                if health_host in {"0.0.0.0", "::", "*"}:
+                    health_host = "127.0.0.1"
+                health_url = f"http://{health_host}:{panel_port}/actuator/health"
+                last_error = ""
+                deadline = time.time() + timeout_sec
+                while time.time() < deadline:
+                    is_active = subprocess.run(
+                        ["systemctl", "is-active", service_name],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    if is_active.returncode == 0 and (is_active.stdout or "").strip() == "active":
+                        try:
+                            response = requests.get(health_url, timeout=3)
+                            if response.ok:
+                                payload = response.json()
+                                if str(payload.get("status", "")).upper() == "UP":
+                                    return True, health_url
+                        except Exception as exc:
+                            last_error = str(exc)
+                    else:
+                        last_error = (is_active.stdout or is_active.stderr or "").strip()
+                    time.sleep(3)
+                return False, last_error or SystemActions._txt(
+                    "Painel nao respondeu dentro do tempo esperado.",
+                    "The panel did not respond within the expected time.",
+                )
+
             if os.name == "nt":
                 return False, SystemActions._txt(
                     "Painel web administrativo nao suportado no Windows.",
@@ -5294,10 +5379,18 @@ class SystemActions:
             ok, msg = SystemActions._validate_service_name(service_name)
             if not ok:
                 return False, msg
+            if not app_dir.startswith("/"):
+                return False, SystemActions._txt(
+                    "Diretorio do painel deve ser absoluto.",
+                    "Panel directory must be an absolute path.",
+                )
+            if not isinstance(panel_port, int) or not (1 <= panel_port <= 65535):
+                return False, SystemActions._txt("Porta invalida.", "Invalid port.")
             if not login_user.strip():
                 return False, SystemActions._txt("Usuario do painel nao pode ser vazio.", "Panel user cannot be empty.")
             if not login_password:
                 login_password = SystemActions._random_secret(20)
+            panel_host = (panel_host or "127.0.0.1").strip() or "127.0.0.1"
             template_dir = SystemActions._admin_web_panel_template_dir()
             if not os.path.isdir(template_dir):
                 return False, SystemActions._txt(
@@ -5312,25 +5405,26 @@ class SystemActions:
             jar_target = os.path.join(app_dir, "app.jar")
 
             update(5, SystemActions._txt("Instalando Java 17 e Maven", "Installing Java 17 and Maven"))
-            result = subprocess.run(["apt-get", "update", "-y"], capture_output=True, text=True, check=False)
-            if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt("Falha no apt-get update.", "apt-get update failed.")
-            result = subprocess.run(
+            ok_cmd, result = run_command(["apt-get", "update", "-y"], attempts=2, delay_sec=3)
+            if not ok_cmd:
+                return False, result
+            ok_cmd, result = run_command(
                 ["apt-get", "install", "-y", "openjdk-17-jdk-headless", "maven"],
-                capture_output=True,
-                text=True,
-                check=False,
+                attempts=2,
+                delay_sec=3,
             )
-            if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+            if not ok_cmd:
+                return False, result or SystemActions._txt(
                     "Falha na instalacao do Java/Maven.",
                     "Java/Maven installation failed.",
                 )
 
             update(20, SystemActions._txt("Copiando template do painel", "Copying the panel template"))
+            os.makedirs(app_dir, exist_ok=True)
             ok, msg = SystemActions._copy_path_if_exists(template_dir, source_dir)
             if not ok:
                 return False, msg
+            cleanup_build_artifacts()
 
             update(35, SystemActions._txt("Gravando ambiente do painel", "Writing panel environment"))
             env_vars = {
@@ -5346,16 +5440,9 @@ class SystemActions:
             if not ok:
                 return False, msg
 
-            update(55, SystemActions._txt("Buildando frontend e backend", "Building frontend and backend"))
-            result = subprocess.run(
-                ["mvn", "-q", "-DskipTests", "package"],
-                capture_output=True,
-                text=True,
-                check=False,
-                cwd=backend_dir,
-            )
-            if result.returncode != 0:
-                return False, result.stderr.strip() or result.stdout.strip() or SystemActions._txt(
+            ok_build, result = build_panel()
+            if not ok_build:
+                return False, result or SystemActions._txt(
                     "Falha no build Maven do painel administrativo.",
                     "Administrative panel Maven build failed.",
                 )
@@ -5390,6 +5477,27 @@ class SystemActions:
             if not service_result[0]:
                 return service_result
 
+            update(90, SystemActions._txt("Validando subida do painel", "Validating panel startup"))
+            ready, ready_data = wait_panel_ready()
+            if not ready:
+                subprocess.run(["systemctl", "restart", service_name], capture_output=True, text=True, check=False)
+                ready, ready_data = wait_panel_ready(timeout_sec=25)
+            if not ready:
+                logs = subprocess.run(
+                    ["journalctl", "-u", service_name, "-n", "120", "--no-pager"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                return False, {
+                    "message": SystemActions._txt(
+                        "Painel instalado, mas nao ficou pronto para responder.",
+                        "The panel was installed, but it did not become ready.",
+                    ),
+                    "details": ready_data,
+                    "logs": (logs.stdout or logs.stderr or "").strip(),
+                }
+
             status = SystemActions.admin_web_panel_status(app_dir=app_dir, service_name=service_name)
             update(100, SystemActions._txt("Painel administrativo instalado", "Administrative panel installed"))
             return True, {
@@ -5405,6 +5513,7 @@ class SystemActions:
                 "login_password": login_password,
                 "local_url": status["local_url"],
                 "remote_url": status["remote_url"],
+                "health_url": ready_data,
                 "service_status": status["service_status"],
                 "notes": [
                     SystemActions._txt("o painel sobe localmente em 127.0.0.1 por padrao", "the panel listens locally on 127.0.0.1 by default"),
