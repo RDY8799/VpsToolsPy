@@ -205,6 +205,12 @@ const UI_TEXT = {
     "tasks.currentStatus": "status atual",
     "tasks.startHint": "início da tarefa",
     "tasks.endHint": "quando finalizou",
+    "tasks.currentMessage": "Mensagem atual",
+    "tasks.liveFeed": "Feed da execução",
+    "tasks.timeline": "Linha do tempo",
+    "tasks.noEvents": "Nenhum evento registrado ainda.",
+    "tasks.parameters": "Parâmetros enviados",
+    "tasks.progress": "Progresso",
     "about.platform": "Plataforma",
     "about.adminPanel": "Painel administrativo",
     "about.platformCopy": "Interface web para operar o script com mais contexto visual, menos densidade desnecessária e melhor distribuição dos elementos.",
@@ -372,6 +378,12 @@ const UI_TEXT = {
     "tasks.currentStatus": "current status",
     "tasks.startHint": "task start",
     "tasks.endHint": "when it finished",
+    "tasks.currentMessage": "Current message",
+    "tasks.liveFeed": "Execution feed",
+    "tasks.timeline": "Timeline",
+    "tasks.noEvents": "No events recorded yet.",
+    "tasks.parameters": "Submitted parameters",
+    "tasks.progress": "Progress",
     "about.platform": "Platform",
     "about.adminPanel": "Admin panel",
     "about.platformCopy": "Web interface to operate the script with more visual context, less unnecessary density and better element distribution.",
@@ -539,6 +551,12 @@ const UI_TEXT = {
     "tasks.currentStatus": "estado actual",
     "tasks.startHint": "inicio de la tarea",
     "tasks.endHint": "cuando terminó",
+    "tasks.currentMessage": "Mensaje actual",
+    "tasks.liveFeed": "Flujo de ejecución",
+    "tasks.timeline": "Línea de tiempo",
+    "tasks.noEvents": "Aún no hay eventos registrados.",
+    "tasks.parameters": "Parámetros enviados",
+    "tasks.progress": "Progreso",
     "about.platform": "Plataforma",
     "about.adminPanel": "Panel administrativo",
     "about.platformCopy": "Interfaz web para operar el script con más contexto visual, menos densidad innecesaria y mejor distribución de los elementos.",
@@ -797,6 +815,42 @@ function summarizeTaskResult(task, t) {
   return extractResultMessage(task.result, task.message || t("overview.noTaskMessage"));
 }
 
+function summarizeTaskEvent(event, t) {
+  if (!event) {
+    return t("common.noAdditionalDetails");
+  }
+  if (event.type === "result") {
+    return extractResultMessage(event.data, event.ok ? t("common.completedWithSuccess") : t("common.failedWithError"));
+  }
+  return event.message || t("common.noAdditionalDetails");
+}
+
+function taskEventTone(event) {
+  if (!event) {
+    return "blue";
+  }
+  if (event.type === "result") {
+    return event.ok ? "green" : "amber";
+  }
+  if (event.type === "progress") {
+    return "blue";
+  }
+  if (event.type === "started") {
+    return "teal";
+  }
+  return "purple";
+}
+
+function taskEventLabel(event, t, locale) {
+  if (!event?.type) {
+    return t("common.unknown");
+  }
+  if (event.type === "result") {
+    return event.ok ? t("common.success") : t("common.error");
+  }
+  return humanizeToken(event.type, locale);
+}
+
 function normalizeActionParams(action, form) {
   const next = {};
   (action?.schema || []).forEach((field) => {
@@ -843,6 +897,45 @@ function getServiceContextActions(service, actionsById) {
   return (SERVICE_CONTEXT_ACTIONS[service?.key] || [])
     .map((actionId) => actionsById[actionId])
     .filter(Boolean);
+}
+
+function getActionChipTone(actionId) {
+  const normalized = String(actionId || "").toLowerCase();
+  if (normalized.includes("delete") || normalized.includes("revoke") || normalized.includes("uninstall")) {
+    return "danger";
+  }
+  if (normalized.includes("stop")) {
+    return "danger";
+  }
+  if (normalized.includes("restart") || normalized.includes("change_") || normalized.includes("update")) {
+    return "warning";
+  }
+  if (normalized.includes("start") || normalized.includes("install") || normalized.includes("create") || normalized.includes("setup") || normalized.includes("configure") || normalized.includes("restore")) {
+    return "success";
+  }
+  return "info";
+}
+
+function getServiceVisualMeta(service) {
+  const key = String(service?.key || "").toUpperCase();
+  const family = String(service?.family || "").toLowerCase();
+
+  if (key === "OPENVPN" || key === "XRAY" || key === "HYSTERIA" || key === "TROJAN" || family === "vpn") {
+    return {icon: "shield", tone: "purple"};
+  }
+  if (key === "VNC" || key === "DROPBEAR" || family === "remote") {
+    return {icon: "terminal", tone: "teal"};
+  }
+  if (key === "SQUID" || key === "SHADOWSOCKS" || family === "proxy") {
+    return {icon: "dashboard", tone: "blue"};
+  }
+  if (key === "SSLH" || key === "STUNNEL" || key === "BADVPN" || family === "multiplexer" || family === "tunnel") {
+    return {icon: "storage", tone: "amber"};
+  }
+  if (key === "OPENCLAW" || family === "ops") {
+    return {icon: "tune", tone: "green"};
+  }
+  return {icon: "dns", tone: "blue"};
 }
 
 function Icon({name}) {
@@ -1058,14 +1151,16 @@ function App() {
 
     const source = new EventSource(`/api/tasks/${selectedTask.id}/stream`);
     eventSources.current[selectedTask.id] = source;
-    source.onmessage = (event) => {
+    const handleTaskEvent = (event) => {
       const payload = JSON.parse(event.data);
       setTasks((current) =>
         current.map((task) => {
           if (task.id !== selectedTask.id) {
             return task;
           }
-          const nextEvents = [...(task.events || []), payload];
+          const nextEvents = payload.type === "started" && (task.events || []).some((item) => item.type === "started")
+            ? [...(task.events || [])]
+            : [...(task.events || []), payload];
           const next = {...task, events: nextEvents};
           if (payload.type === "progress") {
             next.progress = payload.percent ?? task.progress;
@@ -1074,13 +1169,14 @@ function App() {
           }
           if (payload.type === "started") {
             next.state = "running";
-            next.message = "Execucao iniciada";
+            next.message = payload.message || "Execucao iniciada";
           }
           if (payload.type === "result") {
             next.state = payload.ok ? "completed" : "failed";
             next.result = payload.data;
-            next.message = payload.ok ? "Concluido" : "Falhou";
+            next.message = extractResultMessage(payload.data, payload.ok ? "Concluido" : "Falhou");
             next.progress = payload.ok ? 100 : next.progress;
+            next.finishedAt = payload.timestamp || task.finishedAt;
             if (payload.ok) {
               setSnackbar({
                 title: t("common.success"),
@@ -1098,15 +1194,18 @@ function App() {
         })
       );
     };
+    source.addEventListener("task", handleTaskEvent);
+    source.onmessage = handleTaskEvent;
     source.onerror = () => {
       source.close();
       delete eventSources.current[selectedTask.id];
     };
     return () => {
+      source.removeEventListener("task", handleTaskEvent);
       source.close();
       delete eventSources.current[selectedTask.id];
     };
-  }, [selectedTask]);
+  }, [selectedTask, t]);
 
   const handleLogin = async ({username, password}) => {
     try {
@@ -1582,47 +1681,6 @@ function FleetPanel({overview, actionsById, onQuickRun, onOpenAction, t, locale}
   return (
     <div className="page-grid">
       <section className="surface-card">
-        <SectionHeader kicker={t("fleet.operationalFleet")} title={t("fleet.managedServices")} value={(data.managed_services || []).length} />
-        <div className="service-card-grid">
-          {(data.managed_services || []).map((service, index) => (
-            <article className="service-tile motion-rise" style={staggerStyle(index, 80, 40)} key={service.key}>
-              <div className="service-tile-head">
-                <span className="chip-icon chip-icon-blue"><Icon name="dns" /></span>
-                <div>
-                  <strong>{service.name}</strong>
-                  <small>{service.family}</small>
-                </div>
-              </div>
-              <div className="service-meta">
-                <span className={service.active ? "state-pill state-ok" : "state-pill state-danger"}>{humanizeToken(service.status, locale)}</span>
-                <span className="support-pill">{Array.isArray(service.ports) ? (service.ports.join(", ") || t("service.noPorts")) : t("service.compositePorts")}</span>
-              </div>
-              <p className="body-copy tight service-description">{summarizeServiceDetails(service, locale, t)}</p>
-              {getServiceContextActions(service, actionsById).length ? (
-                <div className="tag-cloud">
-                  {getServiceContextActions(service, actionsById).map((action) => (
-                    <button
-                      key={action.id}
-                      type="button"
-                      className="support-pill support-pill-button"
-                      onClick={() => onOpenAction(action.id)}
-                    >
-                      {getActionLabel(action, locale)}
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-              <div className="inline-actions">
-                <button className="text-button" onClick={() => onQuickRun("services.manage", {service_key: service.key, operation: "start"})}>{t("service.start")}</button>
-                <button className="text-button" onClick={() => onQuickRun("services.manage", {service_key: service.key, operation: "stop"})}>{t("service.stop")}</button>
-                <button className="text-button" onClick={() => onQuickRun("services.manage", {service_key: service.key, operation: "logs"})}>{t("service.logs")}</button>
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section className="surface-card">
         <SectionHeader kicker={t("common.dashboardCenter")} title={t("overview.actionCenters")} value={shortcutActions.length} />
         <div className="feature-action-grid">
           {shortcutActions.map((action, index) => {
@@ -1707,6 +1765,7 @@ function OperationsPanel({actions, overview, actionsById, onRunAction, onOpenAct
   const [workspace, setWorkspace] = useState("services");
   const [serviceSearch, setServiceSearch] = useState("");
   const [serviceFamily, setServiceFamily] = useState("all");
+  const [compactHeader, setCompactHeader] = useState(false);
   const deferredSearch = useDeferredValue(search);
   const deferredServiceSearch = useDeferredValue(serviceSearch);
 
@@ -1731,6 +1790,15 @@ function OperationsPanel({actions, overview, actionsById, onRunAction, onOpenAct
       setSelectedActionId(actions[0].id);
     }
   }, [actions, selectedActionId, preset]);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      setCompactHeader(window.scrollY > 150);
+    };
+    handleScroll();
+    window.addEventListener("scroll", handleScroll, {passive: true});
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
 
   const filteredActions = useMemo(() => {
     return actions.filter((action) => {
@@ -1793,7 +1861,7 @@ function OperationsPanel({actions, overview, actionsById, onRunAction, onOpenAct
       {workspace === "catalog" ? (
         <div className="page-grid">
           <section className="surface-card operations-browser operations-browser-wide">
-            <div className="operations-browser-head">
+            <div className={compactHeader ? "operations-browser-head is-collapsed" : "operations-browser-head"}>
               <SectionHeader kicker={t("operations.catalog")} title={t("operations.available")} value={actions.length} />
               <label className="search-inline">
                 <Icon name="search" />
@@ -1856,7 +1924,7 @@ function OperationsPanel({actions, overview, actionsById, onRunAction, onOpenAct
         </div>
       ) : (
         <section className="surface-card operations-services-panel">
-          <div className="operations-browser-head operations-services-head">
+          <div className={compactHeader ? "operations-browser-head operations-services-head is-collapsed" : "operations-browser-head operations-services-head"}>
             <SectionHeader kicker={t("operations.tabServices")} title={t("operations.serviceGridTitle")} value={filteredServices.length} />
             <p className="body-copy">{t("operations.serviceGridCopy")}</p>
             <label className="search-inline">
@@ -1885,10 +1953,13 @@ function OperationsPanel({actions, overview, actionsById, onRunAction, onOpenAct
             <div className="support-banner subdued">{t("common.loadingInfra")}</div>
           ) : filteredServices.length ? (
             <div className="service-card-grid service-card-grid-operations">
-              {filteredServices.map((service, index) => (
+              {filteredServices.map((service, index) => {
+                const visual = getServiceVisualMeta(service);
+                const serviceContextActions = getServiceContextActions(service, actionsById);
+                return (
                 <article className="service-tile motion-rise" style={staggerStyle(index, 80, 36)} key={service.key}>
                   <div className="service-tile-head">
-                    <span className="chip-icon chip-icon-blue"><Icon name="dns" /></span>
+                    <span className={`chip-icon chip-icon-${visual.tone}`}><Icon name={visual.icon} /></span>
                     <div>
                       <strong>{service.name}</strong>
                       <small>{humanizeToken(service.family, locale)}</small>
@@ -1899,29 +1970,34 @@ function OperationsPanel({actions, overview, actionsById, onRunAction, onOpenAct
                     <span className="support-pill">{Array.isArray(service.ports) ? (service.ports.join(", ") || t("service.noPorts")) : t("service.compositePorts")}</span>
                   </div>
                   <p className="body-copy tight service-description">{summarizeServiceDetails(service, locale, t)}</p>
-                  {getServiceContextActions(service, actionsById).length ? (
-                    <div className="tag-cloud">
-                      {getServiceContextActions(service, actionsById).map((action) => (
-                        <button
-                          key={action.id}
-                          type="button"
-                          className="support-pill support-pill-button"
-                          onClick={() => onOpenAction(action.id)}
-                        >
-                          {getActionLabel(action, locale)}
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                  <div className="inline-actions inline-actions-wrap">
-                    <button className="text-button" onClick={() => onRunAction("services.manage", {service_key: service.key, operation: "status"})}>{t("service.status")}</button>
-                    <button className="text-button" onClick={() => onRunAction("services.manage", {service_key: service.key, operation: "start"})}>{t("service.start")}</button>
-                    <button className="text-button" onClick={() => onRunAction("services.manage", {service_key: service.key, operation: "stop"})}>{t("service.stop")}</button>
-                    <button className="text-button" onClick={() => onRunAction("services.manage", {service_key: service.key, operation: "restart"})}>{t("service.restart")}</button>
-                    <button className="text-button" onClick={() => onRunAction("services.manage", {service_key: service.key, operation: "logs"})}>{t("service.logs")}</button>
+                  <div className="service-action-cluster">
+                    {serviceContextActions.length ? (
+                      <div className="tag-cloud service-chip-row">
+                        {serviceContextActions.map((action) => (
+                          <button
+                            key={action.id}
+                            type="button"
+                            className={`support-pill support-pill-button service-action-chip service-action-chip-${getActionChipTone(action.id)}`}
+                            onClick={() => onOpenAction(action.id)}
+                          >
+                            {getActionLabel(action, locale)}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                    {service.installed ? (
+                      <div className="tag-cloud service-chip-row">
+                        <button className="service-action-chip service-action-chip-info" onClick={() => onRunAction("services.manage", {service_key: service.key, operation: "status"})}>{t("service.status")}</button>
+                        <button className="service-action-chip service-action-chip-success" onClick={() => onRunAction("services.manage", {service_key: service.key, operation: "start"})}>{t("service.start")}</button>
+                        <button className="service-action-chip service-action-chip-danger" onClick={() => onRunAction("services.manage", {service_key: service.key, operation: "stop"})}>{t("service.stop")}</button>
+                        <button className="service-action-chip service-action-chip-warning" onClick={() => onRunAction("services.manage", {service_key: service.key, operation: "restart"})}>{t("service.restart")}</button>
+                        <button className="service-action-chip service-action-chip-info" onClick={() => onRunAction("services.manage", {service_key: service.key, operation: "logs"})}>{t("service.logs")}</button>
+                      </div>
+                    ) : null}
                   </div>
                 </article>
-              ))}
+                );
+              })}
             </div>
           ) : (
             <div className="support-banner subdued">{t("operations.noServices")}</div>
@@ -2029,6 +2105,16 @@ function Field({field, value, onChange, t}) {
 }
 
 function TasksPanel({tasks, selectedTask, onSelectTask, t, locale, actionsById}) {
+  const feedRef = useRef(null);
+  const events = selectedTask?.events || [];
+
+  useEffect(() => {
+    if (!feedRef.current) {
+      return;
+    }
+    feedRef.current.scrollTop = feedRef.current.scrollHeight;
+  }, [selectedTask?.id, events.length]);
+
   return (
     <div className="operations-layout">
       <section className="surface-card operations-browser">
@@ -2045,7 +2131,10 @@ function TasksPanel({tasks, selectedTask, onSelectTask, t, locale, actionsById})
                 <Icon name="schedule" />
               </span>
               <span className="catalog-copy">
-                <strong>{getTaskLabel(task.action, actionsById, locale)}</strong>
+                <div className="catalog-title-row">
+                  <strong>{getTaskLabel(task.action, actionsById, locale)}</strong>
+                  <small>{`${task.progress || 0}%`}</small>
+                </div>
                 <small>{humanizeToken(task.state, locale)}</small>
                 <p>{summarizeTaskResult(task, t)}</p>
               </span>
@@ -2063,11 +2152,54 @@ function TasksPanel({tasks, selectedTask, onSelectTask, t, locale, actionsById})
               <HeroStat icon="bolt" tone="blue" label={t("tasks.start")} value={formatDate(selectedTask.startedAt, locale)} hint={t("tasks.startHint")} />
               <HeroStat icon="info" tone="teal" label={t("tasks.end")} value={formatDate(selectedTask.finishedAt, locale)} hint={t("tasks.endHint")} />
             </div>
-            <div className="progress-track"><div style={{width: `${selectedTask.progress || 0}%`}} /></div>
-            <div className="support-banner result-summary">
-              <strong>{t("common.resultSummary")}</strong>
-              <span>{summarizeTaskResult(selectedTask, t) || t("common.noAdditionalDetails")}</span>
+            <div className="progress-stack">
+              <div className="summary-row">
+                <strong>{t("tasks.progress")}</strong>
+                <span>{`${selectedTask.progress || 0}%`}</span>
+              </div>
+              <div className="progress-track"><div style={{width: `${selectedTask.progress || 0}%`}} /></div>
             </div>
+            <div className="support-banner result-summary">
+              <strong>{t("tasks.currentMessage")}</strong>
+              <span>{selectedTask.message || summarizeTaskResult(selectedTask, t) || t("common.noAdditionalDetails")}</span>
+            </div>
+            <div className="two-column-grid task-detail-grid">
+              <div className="surface-card task-feed-card">
+                <SectionHeader kicker={t("tasks.timeline")} title={t("tasks.liveFeed")} value={events.length} />
+                <div className="task-feed" ref={feedRef}>
+                  {events.length ? events.map((event, index) => (
+                    <div className="task-event-row" key={`${selectedTask.id}-${event.type || "event"}-${event.timestamp || index}-${index}`}>
+                      <span className={`chip-icon chip-icon-${taskEventTone(event)}`}>
+                        <Icon name={event.type === "progress" ? "bolt" : event.type === "result" ? "info" : "schedule"} />
+                      </span>
+                      <div className="task-event-copy">
+                        <div className="row-title">
+                          <strong>{taskEventLabel(event, t, locale)}</strong>
+                          <small>{formatDate(event.timestamp, locale)}</small>
+                        </div>
+                        <p>{summarizeTaskEvent(event, t)}</p>
+                      </div>
+                    </div>
+                  )) : <div className="support-banner subdued">{t("tasks.noEvents")}</div>}
+                </div>
+              </div>
+              <div className="stack-lg">
+                <div className="support-banner result-summary">
+                  <strong>{t("common.resultSummary")}</strong>
+                  <span>{summarizeTaskResult(selectedTask, t) || t("common.noAdditionalDetails")}</span>
+                </div>
+                <div className="surface-card task-params-card">
+                  <SectionHeader kicker={t("tasks.execution")} title={t("tasks.parameters")} />
+                  <pre className="log-panel compact">{pretty(selectedTask.params || {})}</pre>
+                </div>
+              </div>
+            </div>
+            {selectedTask.result ? (
+              <div className="surface-card task-result-card">
+                <SectionHeader kicker={t("common.rawDetails")} title={t("common.resultSummary")} />
+                <pre className="log-panel compact">{pretty(selectedTask.result)}</pre>
+              </div>
+            ) : null}
           </div>
         ) : <div className="support-banner subdued">{t("common.selectTask")}</div>}
       </section>
