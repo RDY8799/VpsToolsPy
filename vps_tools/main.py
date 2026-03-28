@@ -1,3 +1,4 @@
+import ipaddress
 import os
 import subprocess
 import sys
@@ -72,6 +73,17 @@ class VPSToolsApp:
         if value.isdigit():
             return str(int(value))
         return value.lower()
+
+    @staticmethod
+    def _is_ip_address(value: str) -> bool:
+        text = str(value or "").strip()
+        if not text:
+            return False
+        try:
+            ipaddress.ip_address(text)
+            return True
+        except ValueError:
+            return False
 
     def _txt(self, pt: str, en: str) -> str:
         return self.lang.t_pair(pt, en)
@@ -1597,7 +1609,7 @@ class VPSToolsApp:
         self.ui.console.print(f"[yellow]4)[/yellow] {self._txt('Status do painel', 'Panel status')}")
         self.ui.console.print(f"[yellow]5)[/yellow] {self._txt('Desinstalar painel', 'Uninstall panel')}")
         self.ui.console.print(f"[yellow]6)[/yellow] {self._txt('Publicar painel via Nginx + login', 'Publish panel via Nginx + login')}")
-        self.ui.console.print(f"[yellow]7)[/yellow] {self._txt('Ativar HTTPS no painel', 'Enable HTTPS on panel')}")
+        self.ui.console.print(f"[yellow]7)[/yellow] {self._txt('Ativar HTTPS no painel (somente dominio)', 'Enable panel HTTPS (domain only)')}")
         option = self._normalize_option(self.ui.prompt(self._txt("Opcao: ", "Option: ")))
 
         action_map = {
@@ -1658,7 +1670,32 @@ class VPSToolsApp:
             return
 
         if option == "7":
-            domains = self._prompt_default("Dominios HTTPS separados por espaco", "HTTPS domains separated by spaces", "db.example.com").split()
+            self.ui.console.print(
+                Panel(
+                    self._txt(
+                        "HTTPS com Certbot exige um dominio real apontando para a VPS. "
+                        "Se voce quer acessar apenas por IP publico, volte e use a opcao de publicar via Nginx + login em HTTP.",
+                        "HTTPS with Certbot requires a real domain pointing to the VPS. "
+                        "If you want IP-only access, go back and use the Nginx + login publishing option over HTTP.",
+                    ),
+                    title=self._txt("HTTPS SOMENTE COM DOMINIO", "HTTPS REQUIRES A DOMAIN"),
+                    border_style="yellow",
+                )
+            )
+            domains = self._prompt_default(
+                "Dominios HTTPS separados por espaco (nao use IP)",
+                "HTTPS domains separated by spaces (do not use an IP)",
+                "db.example.com",
+            ).split()
+            if any(self._is_ip_address(item) for item in domains):
+                self.ui.print_error(
+                    self._txt(
+                        "Nao use IP na opcao de HTTPS. Para acesso por IP, use a opcao de publicar o painel via Nginx + login em HTTP.",
+                        "Do not use an IP in the HTTPS option. For IP-based access, use the option to publish the panel via Nginx + login over HTTP.",
+                    )
+                )
+                self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+                return
             email = self._prompt_default("E-mail do Let's Encrypt", "Let's Encrypt email", "admin@example.com")
             redirect_https = self._prompt_bool_default("Redirecionar HTTP para HTTPS", "Redirect HTTP to HTTPS", True)
 
@@ -1807,7 +1844,7 @@ class VPSToolsApp:
         self.ui.console.print(f"[yellow]5)[/yellow] {self._txt('Rebuild/atualizar painel', 'Rebuild/update panel')}")
         self.ui.console.print(f"[yellow]6)[/yellow] {self._txt('Desinstalar painel', 'Uninstall panel')}")
         self.ui.console.print(f"[yellow]7)[/yellow] {self._txt('Publicar painel via Nginx + login', 'Publish panel via Nginx + login')}")
-        self.ui.console.print(f"[yellow]8)[/yellow] {self._txt('Ativar HTTPS no painel', 'Enable HTTPS on panel')}")
+        self.ui.console.print(f"[yellow]8)[/yellow] {self._txt('Ativar HTTPS no painel (somente dominio)', 'Enable panel HTTPS (domain only)')}")
         option = self._normalize_option(self.ui.prompt(self._txt("Opcao: ", "Option: ")))
 
         if option == "7":
@@ -1837,8 +1874,10 @@ class VPSToolsApp:
 
             ok, data = self.ui.run_animated_task(self._txt("Publicando painel via Nginx", "Publishing panel via Nginx"), worker)
             if ok:
+                mode_text = self._txt("IP publico (HTTP)", "Public IP (HTTP)") if data.get("publish_target") == "ip" else self._txt("Dominio", "Domain")
                 self.ui.console.print(
                     Panel(
+                        f"[white]{self._txt('Modo', 'Mode')}:[/white] [cyan]{mode_text}[/cyan]\n"
                         f"[white]URL:[/white] [cyan]{data['published_url']}[/cyan]\n"
                         f"[white]Login:[/white] [cyan]{data['auth_user']}[/cyan]\n"
                         f"[white]Senha:[/white] [cyan]{data['auth_password']}[/cyan]\n"
@@ -1855,7 +1894,32 @@ class VPSToolsApp:
             return
 
         if option == "8":
-            domains = self._prompt_default("Dominios HTTPS separados por espaco", "HTTPS domains separated by spaces", "admin.example.com").split()
+            self.ui.console.print(
+                Panel(
+                    self._txt(
+                        "HTTPS com Certbot exige um dominio real apontando para a VPS. "
+                        "Se voce quer acessar apenas por IP publico, volte e use a opcao de publicar via Nginx + login em HTTP.",
+                        "HTTPS with Certbot requires a real domain pointing to the VPS. "
+                        "If you want IP-only access, go back and use the Nginx + login publishing option over HTTP.",
+                    ),
+                    title=self._txt("HTTPS SOMENTE COM DOMINIO", "HTTPS REQUIRES A DOMAIN"),
+                    border_style="yellow",
+                )
+            )
+            domains = self._prompt_default(
+                "Dominios HTTPS separados por espaco (nao use IP)",
+                "HTTPS domains separated by spaces (do not use an IP)",
+                "admin.example.com",
+            ).split()
+            if any(self._is_ip_address(item) for item in domains):
+                self.ui.print_error(
+                    self._txt(
+                        "Nao use IP na opcao de HTTPS. Para acesso por IP, use a opcao de publicar o painel via Nginx + login em HTTP.",
+                        "Do not use an IP in the HTTPS option. For IP-based access, use the option to publish the panel via Nginx + login over HTTP.",
+                    )
+                )
+                self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+                return
             email = self._prompt_default("E-mail do Let's Encrypt", "Let's Encrypt email", "admin@example.com")
             redirect_https = self._prompt_bool_default("Redirecionar HTTP para HTTPS", "Redirect HTTP to HTTPS", True)
 

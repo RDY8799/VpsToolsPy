@@ -691,9 +691,9 @@ def _action_catalog() -> list[dict]:
             "category": "infra",
             "categoryLabel": "Infra",
             "label": "Configurar HTTPS com Certbot",
-            "description": "Emite e instala certificado HTTPS com o plugin do Nginx.",
+            "description": "Emite e instala certificado HTTPS com o plugin do Nginx para dominios reais; nao use IP puro.",
             "schema": [
-                _field("domains", "Dominios (separados por espaco)", "text", "example.com", True),
+                _field("domains", "Dominios (separados por espaco, nao use IP)", "text", "example.com", True),
                 _field("email", "E-mail Let's Encrypt", "text", "admin@example.com", True),
                 _field("redirect_https", "Redirecionar HTTP para HTTPS", "boolean", True, True),
             ],

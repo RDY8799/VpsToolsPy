@@ -11,6 +11,7 @@ import subprocess
 import tarfile
 import time
 import calendar
+import ipaddress
 
 import psutil
 import requests
@@ -76,6 +77,32 @@ class SystemActions:
     @staticmethod
     def _txt(pt: str, en: str) -> str:
         return SystemActions._i18n.t_pair(pt, en)
+
+    @staticmethod
+    def _is_ip_address(value: str) -> bool:
+        text = str(value or "").strip()
+        if not text:
+            return False
+        try:
+            ipaddress.ip_address(text)
+            return True
+        except ValueError:
+            return False
+
+    @staticmethod
+    def _normalize_publish_target(publish_target: str, server_names, ip_host: str = ""):
+        normalized_target = (publish_target or "domain").strip().lower()
+        cleaned_server_names = [item.strip() for item in (server_names or []) if str(item).strip()]
+        normalized_ip_host = (ip_host or "").strip()
+        if (
+            normalized_target == "domain"
+            and len(cleaned_server_names) == 1
+            and SystemActions._is_ip_address(cleaned_server_names[0])
+        ):
+            normalized_target = "ip"
+            normalized_ip_host = cleaned_server_names[0]
+            cleaned_server_names = []
+        return normalized_target, cleaned_server_names, normalized_ip_host
 
     @staticmethod
     def _package_manager() -> str:
@@ -4542,10 +4569,20 @@ class SystemActions:
                 progress_callback(completed=percent, description=f"[cyan]{text}[/cyan]")
 
         try:
+            domains = [item.strip() for item in (domains or []) if str(item).strip()]
             if not domains:
                 return False, SystemActions._txt("Informe ao menos um dominio.", "Provide at least one domain.")
             if not email.strip():
                 return False, SystemActions._txt("Informe um e-mail valido.", "Provide a valid email.")
+            ip_targets = [item for item in domains if SystemActions._is_ip_address(item)]
+            if ip_targets:
+                joined = ", ".join(ip_targets)
+                return False, SystemActions._txt(
+                    f"HTTPS com Let's Encrypt nao pode ser emitido para IP puro ({joined}). "
+                    "Use a opcao de publicar o painel por IP em HTTP ou configure um dominio real antes de ativar HTTPS.",
+                    f"Let's Encrypt HTTPS cannot be issued for bare IP addresses ({joined}). "
+                    "Use the panel publishing option over HTTP by IP or configure a real domain before enabling HTTPS.",
+                )
 
             update(10, SystemActions._txt("Instalando Certbot e plugin Nginx", "Installing Certbot and the Nginx plugin"))
             result = subprocess.run(["apt-get", "update", "-y"], capture_output=True, text=True, check=False)
@@ -5052,8 +5089,11 @@ class SystemActions:
             ok, msg = SystemActions._validate_service_name(site_name)
             if not ok:
                 return False, msg
-            publish_target = (publish_target or "domain").strip().lower()
-            server_names = [item.strip() for item in (server_names or []) if item.strip()]
+            publish_target, server_names, ip_host = SystemActions._normalize_publish_target(
+                publish_target,
+                server_names,
+                ip_host,
+            )
             if publish_target not in {"domain", "ip"}:
                 return False, SystemActions._txt(
                     "Modo de publicacao invalido para o painel.",
@@ -5601,8 +5641,11 @@ class SystemActions:
                 return False, SystemActions._txt("Painel administrativo nao instalado.", "Administrative panel is not installed.")
             if not auth_password:
                 auth_password = SystemActions._random_secret(18)
-            publish_target = (publish_target or "domain").strip().lower()
-            server_names = [item.strip() for item in (server_names or []) if item.strip()]
+            publish_target, server_names, ip_host = SystemActions._normalize_publish_target(
+                publish_target,
+                server_names,
+                ip_host,
+            )
             if publish_target == "domain" and not server_names:
                 return False, SystemActions._txt("Informe ao menos um dominio/server_name.", "Provide at least one domain/server_name.")
             if publish_target == "ip":
