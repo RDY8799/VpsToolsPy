@@ -5620,6 +5620,47 @@ class SystemActions:
             return False, str(exc)
 
     @staticmethod
+    def update_admin_web_panel(
+        app_dir: str = "/opt/vps-tools-admin-panel",
+        service_name: str = "vps-tools-admin-panel",
+        progress_callback=None,
+    ):
+        try:
+            status = SystemActions.admin_web_panel_status(app_dir=app_dir, service_name=service_name)
+            if not status.get("installed"):
+                return False, SystemActions._txt(
+                    "Painel administrativo nao encontrado para atualizacao.",
+                    "Administrative panel was not found for update.",
+                )
+
+            env_data = {
+                "PORT": status["panel_port"],
+                "HOST": status["host"],
+                "VPS_PANEL_USERNAME": status["username"],
+            }
+            env_file = status["env_file"]
+            password = ""
+            if os.path.exists(env_file):
+                with open(env_file, "r", encoding="utf-8") as f:
+                    for raw_line in f:
+                        if raw_line.startswith("VPS_PANEL_PASSWORD="):
+                            password = raw_line.split("=", 1)[1].strip().strip("'").strip('"')
+                            break
+
+            return SystemActions.install_admin_web_panel(
+                app_dir=app_dir,
+                panel_port=int(env_data["PORT"]),
+                panel_host=env_data["HOST"],
+                login_user=env_data["VPS_PANEL_USERNAME"],
+                login_password=password,
+                service_name=service_name,
+                run_user="root",
+                progress_callback=progress_callback,
+            )
+        except Exception as exc:
+            return False, str(exc)
+
+    @staticmethod
     def publish_admin_web_panel_via_nginx(
         app_dir: str = "/opt/vps-tools-admin-panel",
         service_name: str = "vps-tools-admin-panel",

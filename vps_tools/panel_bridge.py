@@ -744,6 +744,18 @@ def _action_catalog() -> list[dict]:
             ],
         },
         {
+            "id": "panels.update_admin_web_panel",
+            "category": "panels",
+            "categoryLabel": "Paineis",
+            "label": "Atualizar painel administrativo",
+            "description": "Reconstrui o painel, reinicia o servico e valida a subida com health-check.",
+            "featured": True,
+            "schema": [
+                _field("app_dir", "Diretorio do painel", "text", "/opt/vps-tools-admin-panel", True),
+                _field("service_name", "Nome do servico", "text", "vps-tools-admin-panel", True),
+            ],
+        },
+        {
             "id": "panels.manage_admin_web_panel",
             "category": "panels",
             "categoryLabel": "Paineis",
@@ -1365,6 +1377,11 @@ def _action_handlers() -> dict:
             login_password=p.get("login_password", ""),
             service_name=p.get("service_name", "vps-tools-admin-panel"),
             run_user=p.get("run_user", "root"),
+            progress_callback=_progress_callback,
+        ),
+        "panels.update_admin_web_panel": lambda p: SystemActions.update_admin_web_panel(
+            app_dir=p.get("app_dir", "/opt/vps-tools-admin-panel"),
+            service_name=p.get("service_name", "vps-tools-admin-panel"),
             progress_callback=_progress_callback,
         ),
         "panels.manage_admin_web_panel": lambda p: SystemActions.manage_admin_web_panel(

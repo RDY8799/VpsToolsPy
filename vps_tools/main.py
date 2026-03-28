@@ -1841,7 +1841,7 @@ class VPSToolsApp:
         self.ui.console.print(f"[yellow]2)[/yellow] {self._txt('Parar painel', 'Stop panel')}")
         self.ui.console.print(f"[yellow]3)[/yellow] {self._txt('Reiniciar painel', 'Restart panel')}")
         self.ui.console.print(f"[yellow]4)[/yellow] {self._txt('Status do painel', 'Panel status')}")
-        self.ui.console.print(f"[yellow]5)[/yellow] {self._txt('Rebuild/atualizar painel', 'Rebuild/update panel')}")
+        self.ui.console.print(f"[yellow]5)[/yellow] [cyan]●[/cyan] {self._txt('Atualizar painel administrativo', 'Update administrative panel')}")
         self.ui.console.print(f"[yellow]6)[/yellow] {self._txt('Desinstalar painel', 'Uninstall panel')}")
         self.ui.console.print(f"[yellow]7)[/yellow] {self._txt('Publicar painel via Nginx + login', 'Publish panel via Nginx + login')}")
         self.ui.console.print(f"[yellow]8)[/yellow] {self._txt('Ativar HTTPS no painel (somente dominio)', 'Enable panel HTTPS (domain only)')}")
@@ -1948,12 +1948,44 @@ class VPSToolsApp:
             self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
             return
 
+        if option == "5":
+            def worker(update):
+                return self.sys_actions.update_admin_web_panel(
+                    app_dir=app_dir,
+                    service_name=service_name,
+                    progress_callback=update,
+                )
+
+            ok, data = self.ui.run_animated_task(
+                self._txt("Atualizando painel administrativo", "Updating administrative panel"),
+                worker,
+            )
+            if ok:
+                notes = "\n".join(f"- {item}" for item in data.get("notes", []))
+                self.ui.console.print(
+                    Panel(
+                        f"[white]{self._txt('Diretorio', 'Directory')}:[/white] [cyan]{data['app_dir']}[/cyan]\n"
+                        f"[white]{self._txt('Servico', 'Service')}:[/white] [cyan]{data['service_name']}[/cyan]\n"
+                        f"[white]{self._txt('URL local', 'Local URL')}:[/white] [cyan]{data['local_url']}[/cyan]\n"
+                        f"[white]{self._txt('URL remota', 'Remote URL')}:[/white] [cyan]{data['remote_url']}[/cyan]\n"
+                        f"[white]{self._txt('Login', 'Login')}:[/white] [cyan]{data['login_user']}[/cyan]\n"
+                        f"[white]Health:[/white] [cyan]{data['health_url']}[/cyan]\n\n"
+                        f"[white]{self._txt('Observacoes', 'Notes')}:[/white]\n{notes}\n\n"
+                        f"{data['service_status'][-2500:]}",
+                        title=self._txt("PAINEL ADMINISTRATIVO ATUALIZADO", "ADMINISTRATIVE PANEL UPDATED"),
+                        border_style="green",
+                    )
+                )
+            else:
+                self.ui.print_error(data)
+            self.ui.prompt(self.lang.t("common.press_enter", "Pressione Enter para continuar..."))
+            return
+
         action_map = {
             "1": "start",
             "2": "stop",
             "3": "restart",
             "4": "status",
-            "5": "rebuild",
             "6": "uninstall",
         }
         action = action_map.get(option)

@@ -20,7 +20,7 @@ const CATEGORY_META = {
 };
 
 const HERO_ACTIONS = [
-  {id: "panels.install_admin_web_panel", fallbackLabelKey: "hero.panel", icon: "dashboard", tone: "purple"},
+  {id: "panels.update_admin_web_panel", fallbackLabelKey: "hero.panelUpdate", icon: "dashboard", tone: "purple"},
   {id: "services.manage", fallbackLabelKey: "hero.services", icon: "dns", tone: "blue"},
   {id: "users.create", fallbackLabelKey: "hero.users", icon: "groups", tone: "green"},
   {id: "dr.run_backup", fallbackLabelKey: "hero.backups", icon: "storage", tone: "amber"},
@@ -35,6 +35,7 @@ const FLEET_SHORTCUT_ACTIONS = [
   "infra.setup_https",
   "panels.install_web_db_panel",
   "panels.manage_web_db_panel",
+  "panels.update_admin_web_panel",
   "panels.manage_admin_web_panel",
   "system.systemd_manage",
   "system.update_packages",
@@ -75,6 +76,7 @@ const UI_TEXT = {
     "category.system": "Sistema",
     "category.dr": "DR",
     "hero.panel": "Painel web",
+    "hero.panelUpdate": "Atualizar painel",
     "hero.services": "Serviços",
     "hero.users": "Usuários SSH",
     "hero.backups": "Backups",
@@ -136,6 +138,13 @@ const UI_TEXT = {
     "common.resultSummary": "Resumo do resultado",
     "common.noAdditionalDetails": "Nenhum detalhe adicional disponível.",
     "common.completedAt": "finalizada",
+    "common.cancel": "Cancelar",
+    "common.continue": "Continuar",
+    "common.confirmInstallTitle": "Confirmar instalação",
+    "common.confirmInstallCopy": "Esta ação vai instalar, preparar ou provisionar um componente no servidor. Revise os parâmetros antes de continuar.",
+    "common.confirmInstallTracking": "Se confirmar, a execução será enviada para a aba de tarefas com acompanhamento em tempo real.",
+    "common.executionQueued": "Execução enviada",
+    "common.executionQueuedCopy": "Acompanhe o progresso ao vivo na aba Tarefas.",
     "overview.assisted": "Operação assistida",
     "overview.actionCenters": "Centros de ação",
     "overview.adminPanel": "Painel administrativo",
@@ -248,6 +257,7 @@ const UI_TEXT = {
     "category.system": "System",
     "category.dr": "DR",
     "hero.panel": "Web panel",
+    "hero.panelUpdate": "Update panel",
     "hero.services": "Services",
     "hero.users": "SSH users",
     "hero.backups": "Backups",
@@ -309,6 +319,13 @@ const UI_TEXT = {
     "common.resultSummary": "Result summary",
     "common.noAdditionalDetails": "No additional details available.",
     "common.completedAt": "finished",
+    "common.cancel": "Cancel",
+    "common.continue": "Continue",
+    "common.confirmInstallTitle": "Confirm installation",
+    "common.confirmInstallCopy": "This action will install, prepare, or provision a component on the server. Review the parameters before continuing.",
+    "common.confirmInstallTracking": "If confirmed, the execution will be sent to the tasks tab with real-time tracking.",
+    "common.executionQueued": "Execution submitted",
+    "common.executionQueuedCopy": "Track the live progress in the Tasks tab.",
     "overview.assisted": "Assisted operations",
     "overview.actionCenters": "Action centers",
     "overview.adminPanel": "Admin panel",
@@ -421,6 +438,7 @@ const UI_TEXT = {
     "category.system": "Sistema",
     "category.dr": "DR",
     "hero.panel": "Panel web",
+    "hero.panelUpdate": "Actualizar panel",
     "hero.services": "Servicios",
     "hero.users": "Usuarios SSH",
     "hero.backups": "Respaldos",
@@ -482,6 +500,13 @@ const UI_TEXT = {
     "common.resultSummary": "Resumen del resultado",
     "common.noAdditionalDetails": "No hay detalles adicionales disponibles.",
     "common.completedAt": "finalizada",
+    "common.cancel": "Cancelar",
+    "common.continue": "Continuar",
+    "common.confirmInstallTitle": "Confirmar instalación",
+    "common.confirmInstallCopy": "Esta acción instalará, preparará o aprovisionará un componente en el servidor. Revisa los parámetros antes de continuar.",
+    "common.confirmInstallTracking": "Si confirmas, la ejecución se enviará a la pestaña de tareas con seguimiento en tiempo real.",
+    "common.executionQueued": "Ejecución enviada",
+    "common.executionQueuedCopy": "Sigue el progreso en vivo en la pestaña Tareas.",
     "overview.assisted": "Operación asistida",
     "overview.actionCenters": "Centros de acción",
     "overview.adminPanel": "Panel administrativo",
@@ -938,6 +963,22 @@ function getServiceVisualMeta(service) {
   return {icon: "dns", tone: "blue"};
 }
 
+function actionNeedsConfirmation(action, params = {}) {
+  const actionId = String(action?.id || "").toLowerCase();
+  const label = String(action?.label || "").toLowerCase();
+  const description = String(action?.description || "").toLowerCase();
+  const operation = String(params?.operation || "").toLowerCase();
+  const haystack = `${actionId} ${label} ${description}`;
+
+  if (action?.dangerous) {
+    return true;
+  }
+  if (actionId === "services.manage" && ["install", "uninstall"].includes(operation)) {
+    return true;
+  }
+  return ["install", "setup", "prepare", "provision", "update", "rebuild"].some((token) => haystack.includes(token));
+}
+
 function Icon({name}) {
   const common = {
     viewBox: "0 0 24 24",
@@ -1065,6 +1106,7 @@ function App() {
   const [operationSearchSeed, setOperationSearchSeed] = useState({value: "", nonce: 0});
   const [snackbar, setSnackbar] = useState(null);
   const [errorDialog, setErrorDialog] = useState(null);
+  const [confirmDialog, setConfirmDialog] = useState(null);
   const eventSources = useRef({});
 
   const selectedTask = useMemo(
@@ -1230,10 +1272,22 @@ function App() {
     setActions([]);
   };
 
-  const handleRunAction = async (actionId, formData, nextTab = "tasks") => {
+  const handleRunAction = async (actionId, formData, nextTab = "tasks", skipConfirmation = false) => {
     const action = actionsById[actionId];
     const {normalized} = validateActionForm(action, formData);
     if (submittingAction) {
+      return null;
+    }
+    if (!skipConfirmation && actionNeedsConfirmation(action, normalized)) {
+      setConfirmDialog({
+        actionId,
+        params: normalized,
+        nextTab,
+        title: t("common.confirmInstallTitle"),
+        message: t("common.confirmInstallCopy"),
+        tracking: t("common.confirmInstallTracking"),
+        actionLabel: getActionLabel(action, locale),
+      });
       return null;
     }
     try {
@@ -1246,6 +1300,10 @@ function App() {
       setTasks((current) => [task, ...current]);
       setSelectedTaskId(task.id);
       setActiveTab(nextTab);
+      setSnackbar({
+        title: t("common.executionQueued"),
+        message: t("common.executionQueuedCopy"),
+      });
       return task;
     } catch (error) {
       setAppError(error.message || "Falha ao enviar automacao.");
@@ -1481,6 +1539,47 @@ function App() {
         </div>
       ) : null}
 
+      {confirmDialog ? (
+        <div className="dialog-backdrop" role="presentation" onClick={() => setConfirmDialog(null)}>
+          <div className="dialog-card" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+            <div className="section-header">
+              <div>
+                <div className="section-kicker">{t("common.sensitiveAction")}</div>
+                <h3>{confirmDialog.title}</h3>
+              </div>
+            </div>
+            <div className="stack-lg">
+              <div className="support-banner warning">
+                <strong>{confirmDialog.actionLabel}</strong>
+                <span>{confirmDialog.message}</span>
+              </div>
+              <div className="support-banner subdued">
+                <strong>{t("tasks.liveFeed")}</strong>
+                <span>{confirmDialog.tracking}</span>
+              </div>
+              <div className="surface-card task-params-card">
+                <SectionHeader kicker={t("tasks.execution")} title={t("tasks.parameters")} />
+                <pre className="log-panel compact">{pretty(confirmDialog.params || {})}</pre>
+              </div>
+            </div>
+            <div className="dialog-actions">
+              <button className="tonal-button" type="button" onClick={() => setConfirmDialog(null)}>{t("common.cancel")}</button>
+              <button
+                className="filled-button"
+                type="button"
+                onClick={() => {
+                  const payload = confirmDialog;
+                  setConfirmDialog(null);
+                  handleRunAction(payload.actionId, payload.params, payload.nextTab, true);
+                }}
+              >
+                {t("common.continue")}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {errorDialog ? (
         <div className="dialog-backdrop" role="presentation" onClick={() => setErrorDialog(null)}>
           <div className="dialog-card" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
@@ -1551,7 +1650,7 @@ function OverviewPanel({overview, tasks, onQuickRun, onOpenAction, t, locale, ac
         <div className="surface-card feature-card">
           <SectionHeader kicker={t("overview.assisted")} title={t("overview.actionCenters")} />
           <div className="feature-action-grid">
-            <button className="feature-action motion-rise" style={staggerStyle(0, 90, 60)} onClick={() => onOpenAction("panels.install_admin_web_panel")}>
+            <button className="feature-action motion-rise" style={staggerStyle(0, 90, 60)} onClick={() => onOpenAction("panels.update_admin_web_panel")}>
               <span className="chip-icon chip-icon-purple"><Icon name="dashboard" /></span>
               <div>
                 <strong>{t("overview.adminPanel")}</strong>
@@ -1766,8 +1865,27 @@ function OperationsPanel({actions, overview, actionsById, onRunAction, onOpenAct
   const [serviceSearch, setServiceSearch] = useState("");
   const [serviceFamily, setServiceFamily] = useState("all");
   const [compactHeader, setCompactHeader] = useState(false);
+  const [stageSpotlight, setStageSpotlight] = useState(false);
+  const actionStageRef = useRef(null);
+  const shouldFocusStageRef = useRef(false);
   const deferredSearch = useDeferredValue(search);
   const deferredServiceSearch = useDeferredValue(serviceSearch);
+
+  const focusActionStage = (behavior = "smooth") => {
+    if (!actionStageRef.current) {
+      return;
+    }
+    actionStageRef.current.scrollIntoView({behavior, block: "start"});
+    setStageSpotlight(true);
+  };
+
+  const selectCatalogAction = (actionId, {focusStage = true} = {}) => {
+    if (focusStage) {
+      shouldFocusStageRef.current = true;
+    }
+    setWorkspace("catalog");
+    setSelectedActionId(actionId);
+  };
 
   useEffect(() => {
     if (!searchSeed?.nonce) {
@@ -1782,6 +1900,7 @@ function OperationsPanel({actions, overview, actionsById, onRunAction, onOpenAct
       return;
     }
     if (preset?.actionId) {
+      shouldFocusStageRef.current = true;
       setSelectedActionId(preset.actionId);
       setWorkspace(preset.actionId === "services.manage" ? "services" : "catalog");
       return;
@@ -1799,6 +1918,23 @@ function OperationsPanel({actions, overview, actionsById, onRunAction, onOpenAct
     window.addEventListener("scroll", handleScroll, {passive: true});
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
+
+  useEffect(() => {
+    if (!stageSpotlight) {
+      return undefined;
+    }
+    const timeout = window.setTimeout(() => setStageSpotlight(false), 1100);
+    return () => window.clearTimeout(timeout);
+  }, [stageSpotlight]);
+
+  useEffect(() => {
+    if (workspace !== "catalog" || !selectedActionId || !shouldFocusStageRef.current) {
+      return;
+    }
+    shouldFocusStageRef.current = false;
+    const frame = window.requestAnimationFrame(() => focusActionStage());
+    return () => window.cancelAnimationFrame(frame);
+  }, [workspace, selectedActionId]);
 
   const filteredActions = useMemo(() => {
     return actions.filter((action) => {
@@ -1892,7 +2028,7 @@ function OperationsPanel({actions, overview, actionsById, onRunAction, onOpenAct
                   <button
                     key={action.id}
                     className={selectedAction?.id === action.id ? "catalog-item compact active motion-rise" : "catalog-item compact motion-rise"}
-                    onClick={() => setSelectedActionId(action.id)}
+                    onClick={() => selectCatalogAction(action.id)}
                     style={staggerStyle(index, 120, 35)}
                   >
                     <span className={`chip-icon chip-icon-${meta.tone}`}>
@@ -1911,7 +2047,10 @@ function OperationsPanel({actions, overview, actionsById, onRunAction, onOpenAct
             </div>
           </section>
 
-          <section className="surface-card operations-stage operations-stage-inline">
+          <section
+            ref={actionStageRef}
+            className={stageSpotlight ? "surface-card operations-stage operations-stage-inline is-spotlight" : "surface-card operations-stage operations-stage-inline"}
+          >
             {selectedAction ? (
               <ActionStage action={selectedAction} running={runningAction === selectedAction.id} onRunAction={onRunAction} preset={preset} t={t} locale={locale} />
             ) : (
@@ -2012,6 +2151,7 @@ function ActionStage({action, onRunAction, running, preset, t, locale}) {
   const [form, setForm] = useState({});
   const meta = getCategoryMeta(action.category, locale);
   const {normalized, missing} = useMemo(() => validateActionForm(action, form), [action, form]);
+  const requiresConfirmation = actionNeedsConfirmation(action, normalized);
 
   useEffect(() => {
     const initial = {};
@@ -2037,6 +2177,7 @@ function ActionStage({action, onRunAction, running, preset, t, locale}) {
         </div>
       </div>
       {action.dangerous ? <div className="support-banner warning">{t("common.sensitiveAction")}</div> : null}
+      {requiresConfirmation ? <div className="support-banner subdued">{t("common.confirmInstallTracking")}</div> : null}
       {missing.length ? <div className="support-banner subdued">{t("common.missingRequired")}</div> : null}
       <form className="stack-lg" onSubmit={(event) => {
         event.preventDefault();
